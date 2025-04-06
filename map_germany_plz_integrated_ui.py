@@ -1,5 +1,5 @@
 import tkinter as tk
-from tkinter import simpledialog, messagebox
+from tkinter import simpledialog, messagebox, filedialog  # Import filedialog for Open File Dialog
 import geopandas as gpd
 import matplotlib.pyplot as plt
 import os
@@ -8,6 +8,7 @@ import pgeocode  # New dependency for postal code to coordinate lookup
 import math     # For validating numerical coordinates
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 from matplotlib.backends.backend_pdf import PdfPages
+import json  # For saving and loading routes
 
 # Ensure the root window is defined before creating any widgets
 root = tk.Tk()
@@ -301,17 +302,51 @@ def export_plot_as_pdf(fig):
         pdf.savefig(fig, bbox_inches='tight')
     messagebox.showinfo("Export Success", f"Plot exported successfully to {export_path}.")
 
+# Function to save the current cities and connections to a .trv file
+def save_routes():
+    save_path = filedialog.asksaveasfilename(defaultextension=".trv", filetypes=[("TRV files", "*.trv"), ("All files", "*.*")])
+    if not save_path:
+        return
+    try:
+        with open(save_path, 'w') as file:
+            json.dump({"cities": cities, "connections": connections}, file)
+        messagebox.showinfo("Success", f"Routes saved successfully to {save_path}.")
+    except Exception as e:
+        messagebox.showerror("Error", f"Failed to save routes: {str(e)}")
+
+# Function to load cities and connections from a .trv file
+def load_routes():
+    load_path = filedialog.askopenfilename(filetypes=[("TRV files", "*.trv"), ("All files", "*.*")])
+    if not load_path:
+        return
+    try:
+        with open(load_path, 'r') as file:
+            data = json.load(file)
+            global cities, connections
+            cities = data.get("cities", {})
+            connections = data.get("connections", [])
+        messagebox.showinfo("Success", f"Routes loaded successfully from {load_path}.")
+        if 'canvas' in globals() and 'ax' in globals():
+            update_plot(canvas, ax)
+    except Exception as e:
+        messagebox.showerror("Error", f"Failed to load routes: {str(e)}")
+
 # Modify the integrate_ui_with_plot function to include the export feature
 def integrate_ui_with_plot():
     # Create a new window for the integrated UI and plot
     integrated_window = tk.Toplevel(root)
-    integrated_window.title("Integrated UI and Plot")
+    integrated_window.title("Train Route Visualizer")
 
     # Create a menu bar
     menu_bar = tk.Menu(integrated_window)
     integrated_window.config(menu=menu_bar)
 
-    # Add menus to the menu bar
+    # Reorganize menus to make 'File' the leftmost menu
+    file_menu = tk.Menu(menu_bar, tearoff=0)
+    menu_bar.add_cascade(label="File", menu=file_menu)
+    file_menu.add_command(label="Save Routes", command=save_routes)
+    file_menu.add_command(label="Load Routes", command=load_routes)
+
     city_menu = tk.Menu(menu_bar, tearoff=0)
     menu_bar.add_cascade(label="City", menu=city_menu)
     city_menu.add_command(label="Add City", command=lambda: [add_city(), update_plot(canvas, ax)])
@@ -320,9 +355,9 @@ def integrate_ui_with_plot():
     city_menu.add_command(label="Remove Default Cities", command=lambda: [remove_default_cities(), update_plot(canvas, ax)])
 
     route_menu = tk.Menu(menu_bar, tearoff=0)
-    menu_bar.add_cascade(label="Route", menu=route_menu)
+    menu_bar.add_cascade(label="Connections", menu=route_menu)
     route_menu.add_command(label="Add Connection", command=lambda: [add_connection_dialog(), update_plot(canvas, ax)])
-    route_menu.add_command(label="Remove Route", command=lambda: [remove_route_dialog(), update_plot(canvas, ax)])
+    route_menu.add_command(label="Remove Connection", command=lambda: [remove_route_dialog(), update_plot(canvas, ax)])
 
     export_menu = tk.Menu(menu_bar, tearoff=0)
     menu_bar.add_cascade(label="Export", menu=export_menu)
