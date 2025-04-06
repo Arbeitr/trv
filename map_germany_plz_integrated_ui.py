@@ -335,13 +335,18 @@ def load_routes():
 def integrate_ui_with_plot():
     # Create a new window for the integrated UI and plot
     integrated_window = tk.Toplevel(root)
-    integrated_window.title("Integrated UI and Plot")
+    integrated_window.title("Train Route Visualizer")
 
     # Create a menu bar
     menu_bar = tk.Menu(integrated_window)
     integrated_window.config(menu=menu_bar)
 
-    # Add menus to the menu bar
+    # Reorganize menus to make 'File' the leftmost menu
+    file_menu = tk.Menu(menu_bar, tearoff=0)
+    menu_bar.add_cascade(label="File", menu=file_menu)
+    file_menu.add_command(label="Save Routes", command=save_routes)
+    file_menu.add_command(label="Load Routes", command=load_routes)
+
     city_menu = tk.Menu(menu_bar, tearoff=0)
     menu_bar.add_cascade(label="City", menu=city_menu)
     city_menu.add_command(label="Add City", command=lambda: [add_city(), update_plot(canvas, ax)])
@@ -350,19 +355,13 @@ def integrate_ui_with_plot():
     city_menu.add_command(label="Remove Default Cities", command=lambda: [remove_default_cities(), update_plot(canvas, ax)])
 
     route_menu = tk.Menu(menu_bar, tearoff=0)
-    menu_bar.add_cascade(label="Route", menu=route_menu)
+    menu_bar.add_cascade(label="Connections", menu=route_menu)
     route_menu.add_command(label="Add Connection", command=lambda: [add_connection_dialog(), update_plot(canvas, ax)])
-    route_menu.add_command(label="Remove Route", command=lambda: [remove_route_dialog(), update_plot(canvas, ax)])
+    route_menu.add_command(label="Remove Connection", command=lambda: [remove_route_dialog(), update_plot(canvas, ax)])
 
     export_menu = tk.Menu(menu_bar, tearoff=0)
     menu_bar.add_cascade(label="Export", menu=export_menu)
     export_menu.add_command(label="Export as DIN A4 PDF", command=lambda: export_plot_as_pdf(fig))
-
-    # Add Save and Load options to the menu
-    file_menu = tk.Menu(menu_bar, tearoff=0)
-    menu_bar.add_cascade(label="File", menu=file_menu)
-    file_menu.add_command(label="Save Routes", command=save_routes)
-    file_menu.add_command(label="Load Routes", command=load_routes)
 
     # Add a menu entry to manually update the plot
     menu_bar.add_command(label="Update Plot", command=lambda: update_plot(canvas, ax))
