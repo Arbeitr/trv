@@ -329,55 +329,81 @@ def get_travel_time(city1, city2):
     minutes = travel_time % 60
     return f"{hours}h {minutes}m" if hours > 0 else f"{minutes} min"
 
-# Function to add a transit-style legend below the map
-# Adjusted to include travel time for each city-item and total travel time
+# Function to add separate legends for unconnected chains of cities
+# Adjusted to place legends beside each other if they overlap
 def add_legend(ax, fig):
     # Clear any existing legends
     for child in fig.get_children():
         if isinstance(child, plt.Axes) and child != ax:
             child.remove()
 
+    # Group connections into separate chains
+    chains = []
+    visited = set()
+
+    def dfs(city, chain):
+        for conn in connections:
+            if city in conn:
+                other_city = conn[1] if conn[0] == city else conn[0]
+                if other_city not in visited:
+                    visited.add(other_city)
+                    chain.append((city, other_city))
+                    dfs(other_city, chain)
+
+    for city in cities:
+        if city not in visited:
+            visited.add(city)
+            chain = []
+            dfs(city, chain)
+            if chain:
+                chains.append(chain)
+
     # Define the starting position for the legend items
-    x_position = 0.1  # Fixed x position for stacking
+    x_start = 0.1  # Start position for the first legend
     y_start = -0.1  # Start below the map
-    y_decrement = 0.05  # Vertical spacing between items
+    x_increment = 0.3  # Horizontal spacing between legends
+    y_decrement = 0.05  # Vertical spacing between items in a legend
 
-    total_travel_time = 0
+    for chain_index, chain in enumerate(chains):
+        # Calculate the x and y positions for the current chain
+        x_position = x_start + (chain_index * x_increment)
+        chain_y_start = y_start
+        total_travel_time = 0
 
-    # Draw the transit-style legend directly on the main figure
-    for i, (city1, city2) in enumerate(connections):
-        # Calculate travel time
-        travel_time = get_travel_time(city1, city2)
-        if isinstance(travel_time, str) and 'min' in travel_time:
-            time_in_minutes = int(travel_time.split()[0])
-        elif isinstance(travel_time, str) and 'h' in travel_time:
-            hours, minutes = map(int, travel_time.replace('h', '').replace('m', '').split())
-            time_in_minutes = hours * 60 + minutes
-        else:
-            time_in_minutes = 0
-        total_travel_time += time_in_minutes
+        # Draw the legend for this chain
+        for i, (city1, city2) in enumerate(chain):
+            # Calculate travel time
+            travel_time = get_travel_time(city1, city2)
+            if isinstance(travel_time, str) and 'min' in travel_time:
+                time_in_minutes = int(travel_time.split()[0])
+            elif isinstance(travel_time, str) and 'h' in travel_time:
+                hours, minutes = map(int, travel_time.replace('h', '').replace('m', '').split())
+                time_in_minutes = hours * 60 + minutes
+            else:
+                time_in_minutes = 0
+            total_travel_time += time_in_minutes
 
-        # Draw the line connecting the stations
-        if i > 0:
-            ax.plot([x_position, x_position], [y_start + y_decrement, y_start],
-                    color=connection_colors[i % len(connection_colors)], linewidth=2.5, transform=ax.transAxes, clip_on=False)
+            # Draw the line connecting the stations
+            if i > 0:
+                ax.plot([x_position, x_position], [chain_y_start + y_decrement, chain_y_start],
+                        color=connection_colors[i % len(connection_colors)], linewidth=2.5, transform=ax.transAxes, clip_on=False)
 
-        # Draw the station symbol (white dot with black outline)
-        ax.plot(x_position, y_start, marker='o', markersize=10,
-                markeredgecolor='black', markerfacecolor='white', transform=ax.transAxes, clip_on=False)
+            # Draw the station symbol (white dot with black outline)
+            ax.plot(x_position, chain_y_start, marker='o', markersize=10,
+                    markeredgecolor='black', markerfacecolor='white', transform=ax.transAxes, clip_on=False)
 
-        # Add the station label with travel time
-        ax.text(x_position + 0.05, y_start, f"{city1} -> {city2} ({travel_time})",
-                fontsize=8, fontfamily='sans-serif', ha='left', transform=ax.transAxes, clip_on=False)
+            # Add the station label with travel time
+            ax.text(x_position + 0.05, chain_y_start, f"{city1} -> {city2} ({travel_time})",
+                    fontsize=8, fontfamily='sans-serif', ha='left', transform=ax.transAxes, clip_on=False)
 
-        # Decrement the y position for the next item
-        y_start -= y_decrement
+            # Decrement the y position for the next item
+            chain_y_start -= y_decrement
 
-    # Add total travel time at the bottom
-    total_hours = total_travel_time // 60
-    total_minutes = total_travel_time % 60
-    total_time_str = f"Total Travel Time: {total_hours}h {total_minutes}m" if total_hours > 0 else f"Total Travel Time: {total_minutes} min"
-    ax.text(x_position, y_start - 0.05, total_time_str, fontsize=10, fontfamily='sans-serif', ha='left', transform=ax.transAxes, clip_on=False, fontweight='bold')
+        # Add total travel time for this chain
+        total_hours = total_travel_time // 60
+        total_minutes = total_travel_time % 60
+        total_time_str = f"Total Travel Time: {total_hours}h {total_minutes}m" if total_hours > 0 else f"Total Travel Time: {total_minutes} min"
+        ax.text(x_position, chain_y_start - 0.05, total_time_str, fontsize=10, fontfamily='sans-serif', ha='left', transform=ax.transAxes, clip_on=False, fontweight='bold')
 
 # Function to update the plot dynamically
 def update_plot(canvas, ax, fig):
