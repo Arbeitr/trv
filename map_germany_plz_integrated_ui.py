@@ -139,7 +139,7 @@ add_connection_button.config(command=add_connection_dialog)
 # Function to handle labels for congested areas with many cities
 # Uses color-coded clusters and combined labels for better visualization
 
-def handle_congested_areas(ax, cities, debug=True):
+def handle_congested_areas(ax, cities, debug=False):
     cluster_radius = 1.0  # Reduced radius to group cities into clusters more frequently
     clusters = []
 
@@ -399,8 +399,10 @@ def adjust_travel_time_labels(ax, cities, connections):
                 fontweight='bold', color='black', bbox=dict(facecolor='white', edgecolor='none', boxstyle='round,pad=0.2'),
                 zorder=11)
 
-# Add a function to adjust the position of city labels
-def adjust_city_labels(ax, cities, clusters, connections):
+# Add debug visualization for label placement and explanation
+# Function to adjust city labels and provide debug information
+
+def adjust_city_labels(ax, cities, clusters, connections, debug=False):
     for city, (x, y) in cities.items():
         # Skip cities that are part of a cluster
         if any(city in cluster['cities'] for cluster in clusters):
@@ -413,16 +415,37 @@ def adjust_city_labels(ax, cities, clusters, connections):
             # If there are cities on the same vertical axis, place the label to the right
             label_x = x + 0.2
             alignment = 'left'
+            reason = "Placed to the right due to overlap on the vertical axis."
         else:
             # Otherwise, place the label to the left
             label_x = x - 0.2
             alignment = 'right'
+            reason = "Placed to the left as no vertical overlap detected."
 
         # Draw the city label with adjusted alignment
         ax.text(label_x, y, city, fontsize=10, fontfamily='sans-serif',
                 fontweight='bold', color='white', ha=alignment,
                 bbox=dict(facecolor='darkgrey', edgecolor='none', boxstyle='round,pad=0.3'),
                 zorder=10)
+
+        # Debug mode: visualize label placement and provide explanation
+        if debug:
+            # Draw a line from the city to the label
+            ax.plot([x, label_x], [y, y], color='green', linestyle='--', linewidth=0.8, zorder=5)
+
+            # Check for overlap with other elements
+            overlaps = []
+            for other_city, (other_x, other_y) in cities.items():
+                if other_city != city:
+                    if abs(label_x - other_x) < 0.5 and abs(y - other_y) < 0.5:  # Increased threshold
+                        overlaps.append(other_city)
+
+            # Add debug text explaining the label placement and overlap
+            city_id = city_ids.get(city, "N/A")
+            overlap_text = f"Overlaps: {', '.join(overlaps)}" if overlaps else "No overlap"
+            debug_text = f"City: {city}\nID: {city_id}\nAlignment: {alignment}\n{reason}\nDistance to next label: {abs(label_x - x):.2f}\n{overlap_text}"
+            ax.text(label_x, y - 0.2, debug_text, fontsize=8, fontfamily='monospace',
+                    color='blue', ha=alignment, zorder=10)
 
     # Adjust travel time labels to avoid overlap with city labels
     for city1, city2 in connections:
@@ -444,7 +467,8 @@ def adjust_city_labels(ax, cities, clusters, connections):
 
         # Draw the travel time label
         travel_time = get_travel_time(city1, city2)
-        ax.text(mid_x, mid_y, travel_time, fontsize=8, fontfamily='sans-serif',
+        connection_id = connection_ids.get((city1, city2), connection_ids.get((city2, city1), "N/A"))
+        ax.text(mid_x, mid_y, f"{travel_time}\nID: {connection_id}", fontsize=8, fontfamily='sans-serif',
                 fontweight='bold', color='black', bbox=dict(facecolor='white', edgecolor='none', boxstyle='round,pad=0.2'),
                 zorder=11)
 
@@ -635,7 +659,8 @@ def integrate_ui_with_plot():
     plot_frame = tk.Frame(integrated_window)
     plot_frame.pack(fill=tk.BOTH, expand=True)
 
-    # Generate the plot and embed it in the Tkinter window
+    # Ensure canvas, ax, and fig are globally accessible
+    global canvas, ax, fig
     fig, ax = plt.subplots(figsize=(10, 10))
     ax.set_facecolor('#F5F5F5')
     germany.boundary.plot(ax=ax, linewidth=0.8, color='#CCCCCC')
