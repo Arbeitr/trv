@@ -135,11 +135,12 @@ add_connection_button = tk.Button(root, text="Add Connection")
 add_connection_button.pack(pady=5)
 add_connection_button.config(command=add_connection_dialog)
 
+# Add a debug parameter to visualize cluster radius
 # Function to handle labels for congested areas with many cities
 # Uses color-coded clusters and combined labels for better visualization
 
-def handle_congested_areas(ax, cities):
-    cluster_radius = 0.8  # Reduced radius to group cities into clusters more frequently
+def handle_congested_areas(ax, cities, debug=True):
+    cluster_radius = 1.0  # Reduced radius to group cities into clusters more frequently
     clusters = []
 
     # Group cities into clusters based on proximity
@@ -183,9 +184,11 @@ def handle_congested_areas(ax, cities):
                     bbox=dict(facecolor='red', edgecolor='none', boxstyle='round,pad=0.3'),
                     zorder=10)
 
-            # Remove the lines connecting cities to the cluster center
-            # for x, y in cluster['coords']:
-            #     ax.plot([x, cluster_center[0]], [y, cluster_center[1]], color='grey', linestyle='--', linewidth=0.8, zorder=9)
+    # Debug mode: visualize cluster radius
+    if debug:
+        for city, (x, y) in cities.items():
+            circle = plt.Circle((x, y), cluster_radius, color='blue', fill=False, linestyle='--', linewidth=0.8, zorder=5)
+            ax.add_patch(circle)
 
     # Hide labels for cities that are part of a cluster
     clustered_cities = set()
