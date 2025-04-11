@@ -9,6 +9,7 @@ import math     # For validating numerical coordinates
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 from matplotlib.backends.backend_pdf import PdfPages
 import json  # For saving and loading routes
+from math import radians, sin, cos, sqrt, atan2  # For Haversine formula
 
 # Ensure the root window is defined before creating any widgets
 root = tk.Tk()
@@ -267,6 +268,66 @@ def remove_route_dialog():
 
     tk.Button(remove_window, text="Remove Route", command=delete_route).pack(pady=5)
 
+# Static dataset of train travel times between cities (in minutes)
+travel_times_data = {
+    ("Frankfurt", "Mannheim"): 30,
+    ("Mannheim", "München"): 150,
+    ("München", "Erfurt"): 180,
+    ("Erfurt", "Leipzig"): 60,
+    ("Leipzig", "Potsdam"): 90,
+    ("Potsdam", "Berlin"): 30,
+    ("Berlin", "Magdeburg"): 105,
+    ("Magdeburg", "Hannover"): 90,
+    ("Hannover", "Bremen"): 75,
+    ("Bremen", "Hamburg"): 60,
+    ("Hamburg", "Schwerin"): 90,
+    ("Schwerin", "Stralsund"): 120,
+    ("Stralsund", "Köln"): 360,
+    ("Köln", "Saarbrücken"): 180,
+    ("Saarbrücken", "Mainz"): 90
+}
+
+# Average train speed in km/h (adjust as needed)
+AVERAGE_TRAIN_SPEED_KMH = 100
+
+# Function to calculate the Haversine distance between two coordinates
+def haversine_distance(coord1, coord2):
+    lon1, lat1 = radians(coord1[0]), radians(coord1[1])
+    lon2, lat2 = radians(coord2[0]), radians(coord2[1])
+    dlon = lon2 - lon1
+    dlat = lat2 - lat1
+    a = sin(dlat / 2)**2 + cos(lat1) * cos(lat2) * sin(dlon / 2)**2
+    c = 2 * atan2(sqrt(a), sqrt(1 - a))
+    earth_radius_km = 6371  # Earth's radius in kilometers
+    return earth_radius_km * c
+
+# Function to estimate travel time based on distance
+def estimate_travel_time(coord1, coord2):
+    distance_km = haversine_distance(coord1, coord2)
+    travel_time_hours = distance_km / AVERAGE_TRAIN_SPEED_KMH
+    travel_time_minutes = int(travel_time_hours * 60)
+    hours = travel_time_minutes // 60
+    minutes = travel_time_minutes % 60
+    return f"{hours}h {minutes}m" if hours > 0 else f"{minutes} min"
+
+# Fix the TypeError in get_travel_time by ensuring travel_time is always an integer when performing calculations.
+def get_travel_time(city1, city2):
+    if (city1, city2) in travel_times_data:
+        travel_time = travel_times_data[(city1, city2)]
+    elif (city2, city1) in travel_times_data:
+        travel_time = travel_times_data[(city2, city1)]
+    elif city1 in cities and city2 in cities:
+        # Interpolate travel time for user-added cities
+        travel_time = estimate_travel_time(cities[city1], cities[city2])
+        return travel_time  # Return the string directly for interpolated times
+    else:
+        return "N/A"
+
+    # Ensure travel_time is an integer for predefined travel times
+    hours = travel_time // 60
+    minutes = travel_time % 60
+    return f"{hours}h {minutes}m" if hours > 0 else f"{minutes} min"
+
 # Function to update the plot dynamically
 def update_plot(canvas, ax):
     ax.clear()
@@ -288,6 +349,14 @@ def update_plot(canvas, ax):
         line = LineString([cities[city1], cities[city2]])
         color = connection_colors[i % len(connection_colors)]
         ax.plot(*line.xy, color=color, linewidth=2.5, linestyle='-', alpha=0.9)
+
+        # Add travel time text along the route
+        travel_time = get_travel_time(city1, city2)
+        mid_x = (cities[city1][0] + cities[city2][0]) / 2
+        mid_y = (cities[city1][1] + cities[city2][1]) / 2
+        ax.text(mid_x, mid_y, travel_time, fontsize=8, fontfamily='sans-serif',
+                fontweight='bold', color='black', bbox=dict(facecolor='white', edgecolor='none', boxstyle='round,pad=0.2'),
+                zorder=11)
 
     ax.set_xlim(5, 15)
     ax.set_ylim(47, 55)
