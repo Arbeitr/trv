@@ -428,51 +428,7 @@ def adjust_city_labels(ax, cities, clusters, connections, debug=False):
                 bbox=dict(facecolor='darkgrey', edgecolor='none', boxstyle='round,pad=0.3'),
                 zorder=10)
 
-        # Debug mode: visualize label placement and provide explanation
-        if debug:
-            # Draw a line from the city to the label
-            ax.plot([x, label_x], [y, y], color='green', linestyle='--', linewidth=0.8, zorder=5)
-
-            # Check for overlap with other elements
-            overlaps = []
-            for other_city, (other_x, other_y) in cities.items():
-                if other_city != city:
-                    if abs(label_x - other_x) < 0.5 and abs(y - other_y) < 0.5:  # Increased threshold
-                        overlaps.append(other_city)
-
-            # Add debug text explaining the label placement and overlap
-            city_id = city_ids.get(city, "N/A")
-            overlap_text = f"Overlaps: {', '.join(overlaps)}" if overlaps else "No overlap"
-            debug_text = f"City: {city}\nID: {city_id}\nAlignment: {alignment}\n{reason}\nDistance to next label: {abs(label_x - x):.2f}\n{overlap_text}"
-            ax.text(label_x, y - 0.2, debug_text, fontsize=8, fontfamily='monospace',
-                    color='blue', ha=alignment, zorder=10)
-
-    # Adjust travel time labels to avoid overlap with city labels
-    for city1, city2 in connections:
-        x1, y1 = cities[city1]
-        x2, y2 = cities[city2]
-
-        # Calculate the midpoint of the line
-        mid_x = (x1 + x2) / 2
-        mid_y = (y1 + y2) / 2
-
-        # Check if the midpoint is close to any city label
-        for city, (city_x, city_y) in cities.items():
-            if abs(mid_x - city_x) < 0.5 and abs(mid_y - city_y) < 0.5:
-                # Adjust the travel time label position to avoid overlap
-                if mid_x < city_x:
-                    mid_x -= 0.2
-                else:
-                    mid_x += 0.2
-
-        # Draw the travel time label
-        travel_time = get_travel_time(city1, city2)
-        connection_id = connection_ids.get((city1, city2), connection_ids.get((city2, city1), "N/A"))
-        ax.text(mid_x, mid_y, f"{travel_time}\nID: {connection_id}", fontsize=8, fontfamily='sans-serif',
-                fontweight='bold', color='black', bbox=dict(facecolor='white', edgecolor='none', boxstyle='round,pad=0.2'),
-                zorder=11)
-
-# Update the plot function to use the new travel time label adjustment logic
+# Function to plot the map
 def update_plot(canvas, ax, fig):
     ax.clear()
     ax.set_facecolor('#F5F5F5')
