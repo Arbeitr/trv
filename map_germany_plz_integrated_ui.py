@@ -124,7 +124,7 @@ def add_connection_dialog():
         add_window.destroy()
         # Update the plot dynamically
         if 'canvas' in globals() and 'ax' in globals():
-            update_plot(canvas, ax)
+            update_plot(canvas, ax, fig)
 
     tk.Button(add_window, text="Add Connection", command=create_connection).grid(row=1, column=0, columnspan=4, pady=10)
 
@@ -329,8 +329,36 @@ def get_travel_time(city1, city2):
     minutes = travel_time % 60
     return f"{hours}h {minutes}m" if hours > 0 else f"{minutes} min"
 
+# Function to add a legend below the map
+# Ensure the legend is cleared before adding a new one
+def add_legend(ax, fig):
+    # Clear any existing legends
+    fig.legends = []
+
+    legend_elements = []
+    total_travel_time = 0
+    for i, (city1, city2) in enumerate(connections):
+        color = connection_colors[i % len(connection_colors)]
+        travel_time = get_travel_time(city1, city2)
+        if isinstance(travel_time, str) and 'min' in travel_time:
+            time_in_minutes = int(travel_time.split()[0])
+        elif isinstance(travel_time, str) and 'h' in travel_time:
+            hours, minutes = map(int, travel_time.replace('h', '').replace('m', '').split())
+            time_in_minutes = hours * 60 + minutes
+        else:
+            time_in_minutes = 0
+        total_travel_time += time_in_minutes
+        legend_elements.append(plt.Line2D([0], [0], color=color, lw=2, label=f"{city1} -> {city2} ({travel_time})"))
+
+    total_hours = total_travel_time // 60
+    total_minutes = total_travel_time % 60
+    total_time_str = f"Total Travel Time: {total_hours}h {total_minutes}m" if total_hours > 0 else f"Total Travel Time: {total_minutes} min"
+
+    # Create a legend below the map
+    fig.legend(handles=legend_elements, loc='lower center', fontsize='small', title=total_time_str, ncol=3, frameon=False)
+
 # Function to update the plot dynamically
-def update_plot(canvas, ax):
+def update_plot(canvas, ax, fig):
     ax.clear()
     ax.set_facecolor('#F5F5F5')
     germany.boundary.plot(ax=ax, linewidth=0.8, color='#CCCCCC')
@@ -358,6 +386,9 @@ def update_plot(canvas, ax):
         ax.text(mid_x, mid_y, travel_time, fontsize=8, fontfamily='sans-serif',
                 fontweight='bold', color='black', bbox=dict(facecolor='white', edgecolor='none', boxstyle='round,pad=0.2'),
                 zorder=11)
+
+    # Add the legend below the map
+    add_legend(ax, fig)
 
     ax.set_xlim(5, 15)
     ax.set_ylim(47, 55)
@@ -397,7 +428,7 @@ def load_routes():
             connections = data.get("connections", [])
         messagebox.showinfo("Success", f"Routes loaded successfully from {load_path}.")
         if 'canvas' in globals() and 'ax' in globals():
-            update_plot(canvas, ax)
+            update_plot(canvas, ax, fig)
     except Exception as e:
         messagebox.showerror("Error", f"Failed to load routes: {str(e)}")
 
@@ -419,22 +450,22 @@ def integrate_ui_with_plot():
 
     city_menu = tk.Menu(menu_bar, tearoff=0)
     menu_bar.add_cascade(label="City", menu=city_menu)
-    city_menu.add_command(label="Add City", command=lambda: [add_city(), update_plot(canvas, ax)])
-    city_menu.add_command(label="Edit City", command=lambda: [edit_city_dialog(), update_plot(canvas, ax)])
-    city_menu.add_command(label="Remove City", command=lambda: [remove_city_dialog(), update_plot(canvas, ax)])
-    city_menu.add_command(label="Remove Default Cities", command=lambda: [remove_default_cities(), update_plot(canvas, ax)])
+    city_menu.add_command(label="Add City", command=lambda: [add_city(), update_plot(canvas, ax, fig)])
+    city_menu.add_command(label="Edit City", command=lambda: [edit_city_dialog(), update_plot(canvas, ax, fig)])
+    city_menu.add_command(label="Remove City", command=lambda: [remove_city_dialog(), update_plot(canvas, ax, fig)])
+    city_menu.add_command(label="Remove Default Cities", command=lambda: [remove_default_cities(), update_plot(canvas, ax, fig)])
 
     route_menu = tk.Menu(menu_bar, tearoff=0)
     menu_bar.add_cascade(label="Connections", menu=route_menu)
-    route_menu.add_command(label="Add Connection", command=lambda: [add_connection_dialog(), update_plot(canvas, ax)])
-    route_menu.add_command(label="Remove Connection", command=lambda: [remove_route_dialog(), update_plot(canvas, ax)])
+    route_menu.add_command(label="Add Connection", command=lambda: [add_connection_dialog(), update_plot(canvas, ax, fig)])
+    route_menu.add_command(label="Remove Connection", command=lambda: [remove_route_dialog(), update_plot(canvas, ax, fig)])
 
     export_menu = tk.Menu(menu_bar, tearoff=0)
     menu_bar.add_cascade(label="Export", menu=export_menu)
     export_menu.add_command(label="Export as DIN A4 PDF", command=lambda: export_plot_as_pdf(fig))
 
     # Add a menu entry to manually update the plot
-    menu_bar.add_command(label="Update Plot", command=lambda: update_plot(canvas, ax))
+    menu_bar.add_command(label="Update Plot", command=lambda: update_plot(canvas, ax, fig))
 
     # Create a frame for the plot
     plot_frame = tk.Frame(integrated_window)
@@ -450,7 +481,7 @@ def integrate_ui_with_plot():
     canvas_widget.pack(fill=tk.BOTH, expand=True)
 
     # Initial plot rendering
-    update_plot(canvas, ax)
+    update_plot(canvas, ax, fig)
 
     # Bind the close event of the integrated UI to terminate the script
     integrated_window.protocol("WM_DELETE_WINDOW", lambda: [integrated_window.destroy(), root.destroy()])
