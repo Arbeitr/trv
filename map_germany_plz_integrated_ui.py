@@ -361,8 +361,101 @@ def get_travel_time(city1, city2):
     minutes = travel_time % 60
     return f"{hours}h {minutes}m" if hours > 0 else f"{minutes} min"
 
-# Function to add separate legends for unconnected chains of cities
-# Adjusted to include total travel time for each chain
+# Function to dynamically adjust travel time label positions to avoid overlap with city labels
+def adjust_travel_time_labels(ax, cities, connections):
+    label_positions = {}  # Store positions of city labels to avoid overlap
+
+    # Record city label positions
+    for city, (x, y) in cities.items():
+        label_positions[city] = (x, y + 0.2)  # Assume city labels are placed slightly above the city marker
+
+    # Adjust travel time labels
+    for city1, city2 in connections:
+        mid_x = (cities[city1][0] + cities[city2][0]) / 2
+        mid_y = (cities[city1][1] + cities[city2][1]) / 2
+
+        # Check if the travel time label overlaps with any city label
+        overlap = any(abs(mid_x - label_x) < 0.2 and abs(mid_y - label_y) < 0.2
+                      for label_x, label_y in label_positions.values())
+
+        if overlap:
+            # Move the travel time label slightly to avoid overlap
+            mid_y += 0.3
+
+        # Draw the travel time label
+        travel_time = get_travel_time(city1, city2)
+        ax.text(mid_x, mid_y, travel_time, fontsize=8, fontfamily='sans-serif',
+                fontweight='bold', color='black', bbox=dict(facecolor='white', edgecolor='none', boxstyle='round,pad=0.2'),
+                zorder=11)
+
+# Update the plot function to use the new travel time label adjustment logic
+def update_plot(canvas, ax, fig):
+    ax.clear()
+    ax.set_facecolor('#F5F5F5')
+    germany.boundary.plot(ax=ax, linewidth=0.8, color='#CCCCCC')
+
+    # Plot cities and connections
+    for city, coord in cities.items():
+        ax.plot(coord[0], coord[1], marker='o', markersize=12,
+                markeredgecolor='black', markerfacecolor='white')
+
+    for i, (city1, city2) in enumerate(connections):
+        line = LineString([cities[city1], cities[city2]])
+        color = connection_colors[i % len(connection_colors)]
+        ax.plot(*line.xy, color=color, linewidth=2.5, linestyle='-', alpha=0.9)
+
+    # Adjust travel time labels to avoid overlap
+    adjust_travel_time_labels(ax, cities, connections)
+
+    # Use the new congestion handling system
+    handle_congested_areas(ax, cities)
+
+    # Add the transit-style legend below the map
+    add_legend(ax, fig)
+
+    ax.set_xlim(5, 15)
+    ax.set_ylim(47, 55)
+    ax.axis('off')
+    canvas.draw()
+
+# Function to export the plot as a DIN A4 PDF
+def export_plot_as_pdf(fig):
+    export_path = os.path.join("export", "Plot_DIN_A4.pdf")
+    with PdfPages(export_path) as pdf:
+        fig.set_size_inches(8.27, 11.69)  # Set size to DIN A4 dimensions in inches
+        pdf.savefig(fig, bbox_inches='tight')
+    messagebox.showinfo("Export Success", f"Plot exported successfully to {export_path}.")
+
+# Function to save the current cities and connections to a .trv file
+def save_routes():
+    save_path = filedialog.asksaveasfilename(defaultextension=".trv", filetypes=[("TRV files", "*.trv"), ("All files", "*.*")])
+    if not save_path:
+        return
+    try:
+        with open(save_path, 'w') as file:
+            json.dump({"cities": cities, "connections": connections}, file)
+        messagebox.showinfo("Success", f"Routes saved successfully to {save_path}.")
+    except Exception as e:
+        messagebox.showerror("Error", f"Failed to save routes: {str(e)}")
+
+# Function to load cities and connections from a .trv file
+def load_routes():
+    load_path = filedialog.askopenfilename(filetypes=[("TRV files", "*.trv"), ("All files", "*.*")])
+    if not load_path:
+        return
+    try:
+        with open(load_path, 'r') as file:
+            data = json.load(file)
+            global cities, connections
+            cities = data.get("cities", {})
+            connections = data.get("connections", [])
+        messagebox.showinfo("Success", f"Routes loaded successfully from {load_path}.")
+        if 'canvas' in globals() and 'ax' in globals():
+            update_plot(canvas, ax, fig)
+    except Exception as e:
+        messagebox.showerror("Error", f"Failed to load routes: {str(e)}")
+
+# Function to add a legend for the map, showing route chains and their total travel times
 def add_legend(ax, fig):
     # Clear any existing legends
     for child in fig.get_children():
@@ -433,20 +526,6 @@ def add_legend(ax, fig):
             # Decrement the y position for the next item
             chain_y_start -= y_decrement
 
-        # Add the last line connecting the last two cities in the chain
-        if len(chain) > 1:
-            last_city1, last_city2 = chain[-1]
-            ax.plot([x_position, x_position], [chain_y_start + y_decrement, chain_y_start],
-                    color=connection_colors[(len(chain) - 1) % len(connection_colors)], linewidth=2.5, transform=ax.transAxes, clip_on=False)
-
-        # Add the last city in the chain to the legend
-        if chain:
-            last_city = chain[-1][1]
-            ax.plot(x_position, chain_y_start, marker='o', markersize=10,
-                    markeredgecolor='black', markerfacecolor='white', transform=ax.transAxes, clip_on=False)
-            ax.text(x_position + 0.05, chain_y_start, last_city,
-                    fontsize=8, fontfamily='sans-serif', ha='left', transform=ax.transAxes, clip_on=False, wrap=True, bbox=dict(facecolor='white', edgecolor='none', boxstyle='round,pad=0.2'))
-
         # Add a separator or title for the chain
         total_hours = total_travel_time // 60
         total_minutes = total_travel_time % 60
@@ -454,79 +533,7 @@ def add_legend(ax, fig):
         ax.text(x_position, chain_y_start - 0.05, f"Route {chain_index + 1} ({total_time_str})",
                 fontsize=10, fontfamily='sans-serif', ha='left', transform=ax.transAxes, clip_on=False, fontweight='bold', bbox=dict(facecolor='lightgrey', edgecolor='none', boxstyle='round,pad=0.3'))
 
-# Function to update the plot dynamically
-def update_plot(canvas, ax, fig):
-    ax.clear()
-    ax.set_facecolor('#F5F5F5')
-    germany.boundary.plot(ax=ax, linewidth=0.8, color='#CCCCCC')
-
-    # Plot cities and connections
-    for city, coord in cities.items():
-        ax.plot(coord[0], coord[1], marker='o', markersize=12,
-                markeredgecolor='black', markerfacecolor='white')
-
-    for i, (city1, city2) in enumerate(connections):
-        line = LineString([cities[city1], cities[city2]])
-        color = connection_colors[i % len(connection_colors)]
-        ax.plot(*line.xy, color=color, linewidth=2.5, linestyle='-', alpha=0.9)
-
-        # Add travel time text along the route
-        travel_time = get_travel_time(city1, city2)
-        mid_x = (cities[city1][0] + cities[city2][0]) / 2
-        mid_y = (cities[city1][1] + cities[city2][1]) / 2
-        ax.text(mid_x, mid_y, travel_time, fontsize=8, fontfamily='sans-serif',
-                fontweight='bold', color='black', bbox=dict(facecolor='white', edgecolor='none', boxstyle='round,pad=0.2'),
-                zorder=11)
-
-    # Use the new congestion handling system
-    handle_congested_areas(ax, cities)
-
-    # Add the transit-style legend below the map
-    add_legend(ax, fig)
-
-    ax.set_xlim(5, 15)
-    ax.set_ylim(47, 55)
-    ax.axis('off')
-    canvas.draw()
-
-# Function to export the plot as a DIN A4 PDF
-def export_plot_as_pdf(fig):
-    export_path = os.path.join("export", "Plot_DIN_A4.pdf")
-    with PdfPages(export_path) as pdf:
-        fig.set_size_inches(8.27, 11.69)  # Set size to DIN A4 dimensions in inches
-        pdf.savefig(fig, bbox_inches='tight')
-    messagebox.showinfo("Export Success", f"Plot exported successfully to {export_path}.")
-
-# Function to save the current cities and connections to a .trv file
-def save_routes():
-    save_path = filedialog.asksaveasfilename(defaultextension=".trv", filetypes=[("TRV files", "*.trv"), ("All files", "*.*")])
-    if not save_path:
-        return
-    try:
-        with open(save_path, 'w') as file:
-            json.dump({"cities": cities, "connections": connections}, file)
-        messagebox.showinfo("Success", f"Routes saved successfully to {save_path}.")
-    except Exception as e:
-        messagebox.showerror("Error", f"Failed to save routes: {str(e)}")
-
-# Function to load cities and connections from a .trv file
-def load_routes():
-    load_path = filedialog.askopenfilename(filetypes=[("TRV files", "*.trv"), ("All files", "*.*")])
-    if not load_path:
-        return
-    try:
-        with open(load_path, 'r') as file:
-            data = json.load(file)
-            global cities, connections
-            cities = data.get("cities", {})
-            connections = data.get("connections", [])
-        messagebox.showinfo("Success", f"Routes loaded successfully from {load_path}.")
-        if 'canvas' in globals() and 'ax' in globals():
-            update_plot(canvas, ax, fig)
-    except Exception as e:
-        messagebox.showerror("Error", f"Failed to load routes: {str(e)}")
-
-# Modify the integrate_ui_with_plot function to include the export feature
+# Update the integrate_ui_with_plot function to include the export feature
 def integrate_ui_with_plot():
     # Create a new window for the integrated UI and plot
     integrated_window = tk.Toplevel(root)
