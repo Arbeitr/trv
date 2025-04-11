@@ -133,18 +133,57 @@ add_connection_button = tk.Button(root, text="Add Connection")
 add_connection_button.pack(pady=5)
 add_connection_button.config(command=add_connection_dialog)
 
-# Function to check and adjust label positions to avoid overlap
-def adjust_label_positions(labels):
-    adjusted_positions = {}
-    for city, (x, y) in labels.items():
-        for other_city, (other_x, other_y) in adjusted_positions.items():
-            if abs(x - other_x) < 0.5 and abs(y - other_y) < 0.5:
-                if y > other_y:
-                    y += 0.2
-                else:
-                    adjusted_positions[other_city] = (other_x, other_y + 0.2)
-        adjusted_positions[city] = (x, y)
-    return adjusted_positions
+# Function to handle labels for congested areas with many cities
+# Uses color-coded clusters and combined labels for better visualization
+
+def handle_congested_areas(ax, cities):
+    cluster_radius = 0.5  # Radius to group cities into clusters
+    clusters = []
+
+    # Group cities into clusters based on proximity
+    for city, (x, y) in cities.items():
+        added_to_cluster = False
+        for cluster in clusters:
+            cluster_center = cluster['center']
+            if abs(cluster_center[0] - x) < cluster_radius and abs(cluster_center[1] - y) < cluster_radius:
+                cluster['cities'].append(city)
+                cluster['coords'].append((x, y))
+                cluster['center'] = (
+                    sum(coord[0] for coord in cluster['coords']) / len(cluster['coords']),
+                    sum(coord[1] for coord in cluster['coords']) / len(cluster['coords'])
+                )
+                added_to_cluster = True
+                break
+
+        if not added_to_cluster:
+            clusters.append({
+                'cities': [city],
+                'coords': [(x, y)],
+                'center': (x, y)
+            })
+
+    # Draw clusters and labels
+    for cluster in clusters:
+        if len(cluster['cities']) == 1:
+            # Single city, draw normally
+            city = cluster['cities'][0]
+            x, y = cluster['coords'][0]
+            ax.text(x, y + 0.2, city, fontsize=10, fontfamily='sans-serif',
+                    fontweight='bold', color='white',
+                    bbox=dict(facecolor='darkgrey', edgecolor='none', boxstyle='round,pad=0.3'),
+                    zorder=10)
+        else:
+            # Multiple cities, combine into a cluster label
+            cluster_center = cluster['center']
+            cluster_label = f"{len(cluster['cities'])} cities"
+            ax.text(cluster_center[0], cluster_center[1] + 0.2, cluster_label, fontsize=10, fontfamily='sans-serif',
+                    fontweight='bold', color='white',
+                    bbox=dict(facecolor='red', edgecolor='none', boxstyle='round,pad=0.3'),
+                    zorder=10)
+
+            # Optionally, draw lines connecting cities to the cluster center
+            for x, y in cluster['coords']:
+                ax.plot([x, cluster_center[0]], [y, cluster_center[1]], color='grey', linestyle='--', linewidth=0.8, zorder=9)
 
 # Function to plot the map
 def plot_map():
@@ -152,16 +191,9 @@ def plot_map():
     ax.set_facecolor('#F5F5F5')
     germany.boundary.plot(ax=ax, linewidth=0.8, color='#CCCCCC')
     # Create labels and adjust positions to prevent overlap
-    labels = {city: (coord[0] + 0.2, coord[1]) for city, coord in cities.items()}
-    adjusted_labels = adjust_label_positions(labels)
     for city, coord in cities.items():
         ax.plot(coord[0], coord[1], marker='o', markersize=12,
                 markeredgecolor='black', markerfacecolor='white')
-        label_x, label_y = adjusted_labels[city]
-        ax.text(label_x, label_y, city, fontsize=10, fontfamily='sans-serif',
-                fontweight='bold', color='white',
-                bbox=dict(facecolor='darkgrey', edgecolor='none', boxstyle='round,pad=0.3'),
-                zorder=10)
     for i, (city1, city2) in enumerate(connections):
         line = LineString([cities[city1], cities[city2]])
         color = connection_colors[i % len(connection_colors)]
@@ -401,6 +433,20 @@ def add_legend(ax, fig):
             # Decrement the y position for the next item
             chain_y_start -= y_decrement
 
+        # Add the last line connecting the last two cities in the chain
+        if len(chain) > 1:
+            last_city1, last_city2 = chain[-1]
+            ax.plot([x_position, x_position], [chain_y_start + y_decrement, chain_y_start],
+                    color=connection_colors[(len(chain) - 1) % len(connection_colors)], linewidth=2.5, transform=ax.transAxes, clip_on=False)
+
+        # Add the last city in the chain to the legend
+        if chain:
+            last_city = chain[-1][1]
+            ax.plot(x_position, chain_y_start, marker='o', markersize=10,
+                    markeredgecolor='black', markerfacecolor='white', transform=ax.transAxes, clip_on=False)
+            ax.text(x_position + 0.05, chain_y_start, last_city,
+                    fontsize=8, fontfamily='sans-serif', ha='left', transform=ax.transAxes, clip_on=False, wrap=True, bbox=dict(facecolor='white', edgecolor='none', boxstyle='round,pad=0.2'))
+
         # Add a separator or title for the chain
         total_hours = total_travel_time // 60
         total_minutes = total_travel_time % 60
@@ -415,16 +461,10 @@ def update_plot(canvas, ax, fig):
     germany.boundary.plot(ax=ax, linewidth=0.8, color='#CCCCCC')
 
     # Plot cities and connections
-    labels = {city: (coord[0] + 0.2, coord[1]) for city, coord in cities.items()}
-    adjusted_labels = adjust_label_positions(labels)
     for city, coord in cities.items():
         ax.plot(coord[0], coord[1], marker='o', markersize=12,
                 markeredgecolor='black', markerfacecolor='white')
-        label_x, label_y = adjusted_labels[city]
-        ax.text(label_x, label_y, city, fontsize=10, fontfamily='sans-serif',
-                fontweight='bold', color='white',
-                bbox=dict(facecolor='darkgrey', edgecolor='none', boxstyle='round,pad=0.3'),
-                zorder=10)
+
     for i, (city1, city2) in enumerate(connections):
         line = LineString([cities[city1], cities[city2]])
         color = connection_colors[i % len(connection_colors)]
@@ -437,6 +477,9 @@ def update_plot(canvas, ax, fig):
         ax.text(mid_x, mid_y, travel_time, fontsize=8, fontfamily='sans-serif',
                 fontweight='bold', color='black', bbox=dict(facecolor='white', edgecolor='none', boxstyle='round,pad=0.2'),
                 zorder=11)
+
+    # Use the new congestion handling system
+    handle_congested_areas(ax, cities)
 
     # Add the transit-style legend below the map
     add_legend(ax, fig)
