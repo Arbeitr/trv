@@ -68,22 +68,24 @@ connection_colors = [
     "#858379", "#646973"
 ]
 
-# Modified function to add a new city using the postal code (Postleitzahl)
+# Add a unique ID to each city and connection
+city_ids = {city: f"city_{i}" for i, city in enumerate(cities.keys())}
+connection_ids = {connection: f"conn_{i}" for i, connection in enumerate(connections)}
+
+# Update the add_city function to assign a unique ID
 def add_city():
     postal_code = simpledialog.askstring("Add City", "Enter Postleitzahl:")
     if not postal_code:
         return
     try:
-        # Create a pgeocode Nominatim object for Germany
         nomi = pgeocode.Nominatim('de')
         info = nomi.query_postal_code(postal_code)
-        # If postal code not found, latitude and longitude will be NaN
         if math.isnan(info.latitude) or math.isnan(info.longitude):
             messagebox.showerror("Error", "Postal code not found. Please enter a valid Postleitzahl.")
             return
-        # Use the place name provided by pgeocode; if absent, default to the postal code
         city_name = info.place_name if info.place_name else postal_code
         cities[city_name] = (info.longitude, info.latitude)
+        city_ids[city_name] = f"city_{len(city_ids)}"  # Assign a unique ID
         messagebox.showinfo("Success", f"City '{city_name}' added successfully!")
     except Exception as e:
         messagebox.showerror("Error", "Error retrieving location data: " + str(e))
@@ -98,15 +100,14 @@ def add_connection_dialog():
     add_window.title("Add Connection")
 
     tk.Label(add_window, text="Select the first city:").grid(row=0, column=0, padx=5, pady=5)
-    # Sort the entries in the drop-down menus alphabetically
     city1_var = tk.StringVar(add_window)
-    city1_var.set(sorted(cities.keys())[0])  # Set the first city alphabetically
+    city1_var.set(sorted(cities.keys())[0])
     city1_menu = tk.OptionMenu(add_window, city1_var, *sorted(cities.keys()))
     city1_menu.grid(row=0, column=1, padx=5, pady=5)
 
     tk.Label(add_window, text="Select the second city:").grid(row=0, column=2, padx=5, pady=5)
     city2_var = tk.StringVar(add_window)
-    city2_var.set(sorted(cities.keys())[1])  # Set the second city alphabetically
+    city2_var.set(sorted(cities.keys())[1])
     city2_menu = tk.OptionMenu(add_window, city2_var, *sorted(cities.keys()))
     city2_menu.grid(row=0, column=3, padx=5, pady=5)
 
@@ -120,10 +121,11 @@ def add_connection_dialog():
             messagebox.showerror("Error", "This connection already exists.")
             return
         connections.append((city1, city2))
+        connection_ids[(city1, city2)] = f"conn_{len(connection_ids)}"  # Assign a unique ID
         messagebox.showinfo("Success", f"Connection added between {city1} and {city2}!")
         add_window.destroy()
         # Update the plot dynamically
-        if 'canvas' in globals() and 'ax' in globals():
+        if 'canvas' in globals() and 'ax' in globals() and 'fig' in globals():
             update_plot(canvas, ax, fig)
 
     tk.Button(add_window, text="Add Connection", command=create_connection).grid(row=1, column=0, columnspan=4, pady=10)
@@ -137,7 +139,7 @@ add_connection_button.config(command=add_connection_dialog)
 # Uses color-coded clusters and combined labels for better visualization
 
 def handle_congested_areas(ax, cities):
-    cluster_radius = 0.5  # Radius to group cities into clusters
+    cluster_radius = 0.8  # Reduced radius to group cities into clusters more frequently
     clusters = []
 
     # Group cities into clusters based on proximity
@@ -168,22 +170,30 @@ def handle_congested_areas(ax, cities):
             # Single city, draw normally
             city = cluster['cities'][0]
             x, y = cluster['coords'][0]
-            ax.text(x, y + 0.2, city, fontsize=10, fontfamily='sans-serif',
+            ax.text(x, y, city, fontsize=10, fontfamily='sans-serif',
                     fontweight='bold', color='white',
                     bbox=dict(facecolor='darkgrey', edgecolor='none', boxstyle='round,pad=0.3'),
                     zorder=10)
         else:
             # Multiple cities, combine into a cluster label
             cluster_center = cluster['center']
-            cluster_label = f"{len(cluster['cities'])} cities"
+            cluster_label = ", ".join(cluster['cities'])  # Combine city names into a single label
             ax.text(cluster_center[0], cluster_center[1] + 0.2, cluster_label, fontsize=10, fontfamily='sans-serif',
                     fontweight='bold', color='white',
                     bbox=dict(facecolor='red', edgecolor='none', boxstyle='round,pad=0.3'),
                     zorder=10)
 
-            # Optionally, draw lines connecting cities to the cluster center
-            for x, y in cluster['coords']:
-                ax.plot([x, cluster_center[0]], [y, cluster_center[1]], color='grey', linestyle='--', linewidth=0.8, zorder=9)
+            # Remove the lines connecting cities to the cluster center
+            # for x, y in cluster['coords']:
+            #     ax.plot([x, cluster_center[0]], [y, cluster_center[1]], color='grey', linestyle='--', linewidth=0.8, zorder=9)
+
+    # Hide labels for cities that are part of a cluster
+    clustered_cities = set()
+    for cluster in clusters:
+        if len(cluster['cities']) > 1:
+            clustered_cities.update(cluster['cities'])
+
+    return clusters, clustered_cities
 
 # Function to plot the map
 def plot_map():
@@ -371,16 +381,73 @@ def adjust_travel_time_labels(ax, cities, connections):
 
     # Adjust travel time labels
     for city1, city2 in connections:
-        mid_x = (cities[city1][0] + cities[city2][0]) / 2
-        mid_y = (cities[city1][1] + cities[city2][1]) / 2
+        x1, y1 = cities[city1]
+        x2, y2 = cities[city2]
 
-        # Check if the travel time label overlaps with any city label
-        overlap = any(abs(mid_x - label_x) < 0.2 and abs(mid_y - label_y) < 0.2
-                      for label_x, label_y in label_positions.values())
+        # Calculate the midpoint of the line
+        mid_x = (x1 + x2) / 2
+        mid_y = (y1 + y2) / 2
 
-        if overlap:
-            # Move the travel time label slightly to avoid overlap
-            mid_y += 0.3
+        # Calculate a small offset along the line to move the label further from city labels
+        offset_factor = 0.1  # Adjust this factor to control the distance of the label from the midpoint
+        dx = x2 - x1
+        dy = y2 - y1
+        length = (dx**2 + dy**2)**0.5
+        offset_x = offset_factor * (dx / length)
+        offset_y = offset_factor * (dy / length)
+
+        # Adjust the label position to avoid overlap with city labels
+        label_x = mid_x + offset_x
+        label_y = mid_y + offset_y
+
+        # Draw the travel time label
+        travel_time = get_travel_time(city1, city2)
+        ax.text(label_x, label_y, travel_time, fontsize=8, fontfamily='sans-serif',
+                fontweight='bold', color='black', bbox=dict(facecolor='white', edgecolor='none', boxstyle='round,pad=0.2'),
+                zorder=11)
+
+# Add a function to adjust the position of city labels
+def adjust_city_labels(ax, cities, clusters, connections):
+    for city, (x, y) in cities.items():
+        # Skip cities that are part of a cluster
+        if any(city in cluster['cities'] for cluster in clusters):
+            continue
+
+        # Check if there are other cities on the same vertical axis
+        same_vertical_cities = [other_city for other_city, (other_x, other_y) in cities.items() if abs(other_x - x) < 0.01 and other_city != city]
+
+        if same_vertical_cities:
+            # If there are cities on the same vertical axis, place the label to the right
+            label_x = x + 0.2
+            alignment = 'left'
+        else:
+            # Otherwise, place the label to the left
+            label_x = x - 0.2
+            alignment = 'right'
+
+        # Draw the city label with adjusted alignment
+        ax.text(label_x, y, city, fontsize=10, fontfamily='sans-serif',
+                fontweight='bold', color='white', ha=alignment,
+                bbox=dict(facecolor='darkgrey', edgecolor='none', boxstyle='round,pad=0.3'),
+                zorder=10)
+
+    # Adjust travel time labels to avoid overlap with city labels
+    for city1, city2 in connections:
+        x1, y1 = cities[city1]
+        x2, y2 = cities[city2]
+
+        # Calculate the midpoint of the line
+        mid_x = (x1 + x2) / 2
+        mid_y = (y1 + y2) / 2
+
+        # Check if the midpoint is close to any city label
+        for city, (city_x, city_y) in cities.items():
+            if abs(mid_x - city_x) < 0.5 and abs(mid_y - city_y) < 0.5:
+                # Adjust the travel time label position to avoid overlap
+                if mid_x < city_x:
+                    mid_x -= 0.2
+                else:
+                    mid_x += 0.2
 
         # Draw the travel time label
         travel_time = get_travel_time(city1, city2)
@@ -408,7 +475,10 @@ def update_plot(canvas, ax, fig):
     adjust_travel_time_labels(ax, cities, connections)
 
     # Use the new congestion handling system
-    handle_congested_areas(ax, cities)
+    clusters, clustered_cities = handle_congested_areas(ax, cities)
+
+    # Call the adjust_city_labels function to apply label adjustments
+    adjust_city_labels(ax, cities, clusters, connections)
 
     # Add the transit-style legend below the map
     add_legend(ax, fig)
@@ -450,7 +520,7 @@ def load_routes():
             cities = data.get("cities", {})
             connections = data.get("connections", [])
         messagebox.showinfo("Success", f"Routes loaded successfully from {load_path}.")
-        if 'canvas' in globals() and 'ax' in globals():
+        if 'canvas' in globals() and 'ax' in globals() and 'fig' in globals():
             update_plot(canvas, ax, fig)
     except Exception as e:
         messagebox.showerror("Error", f"Failed to load routes: {str(e)}")
