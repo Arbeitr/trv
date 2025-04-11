@@ -10,6 +10,7 @@ from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 from matplotlib.backends.backend_pdf import PdfPages
 import json  # For saving and loading routes
 from math import radians, sin, cos, sqrt, atan2  # For Haversine formula
+from geopandas import GeoSeries  # Ensure GeoSeries is imported
 
 # Ensure the root window is defined before creating any widgets
 root = tk.Tk()
@@ -428,8 +429,14 @@ def adjust_city_labels(ax, cities, clusters, connections, debug=False):
                 bbox=dict(facecolor='darkgrey', edgecolor='none', boxstyle='round,pad=0.3'),
                 zorder=10)
 
-# Function to plot the map
+# Modify the update_plot function to preserve zoom unless reset_zoom is used
+# Store the current zoom state globally
+global current_zoom_bounds
+current_zoom_bounds = None
+
+# Update the update_plot function to use the current zoom bounds if available
 def update_plot(canvas, ax, fig):
+    global current_zoom_bounds
     ax.clear()
     ax.set_facecolor('#F5F5F5')
     germany.boundary.plot(ax=ax, linewidth=0.8, color='#CCCCCC')
@@ -453,8 +460,64 @@ def update_plot(canvas, ax, fig):
     # Call the adjust_city_labels function to apply label adjustments
     adjust_city_labels(ax, cities, clusters, connections)
 
-    ax.set_xlim(5, 15)
-    ax.set_ylim(47, 55)
+    # Restore zoom bounds if available
+    if current_zoom_bounds is not None and current_zoom_bounds.size > 0:
+        ax.set_xlim(current_zoom_bounds[0], current_zoom_bounds[2])
+        ax.set_ylim(current_zoom_bounds[1], current_zoom_bounds[3])
+    else:
+        ax.set_xlim(5, 15)
+        ax.set_ylim(47, 55)
+
+    ax.axis('off')
+    canvas.draw()
+
+# Update the reset_zoom function to clear the current zoom bounds
+def reset_zoom():
+    global current_zoom_bounds
+    current_zoom_bounds = None
+    update_plot(canvas, ax, fig)
+
+# Update the zoom_into_states function to set the current zoom bounds
+def zoom_into_states():
+    global current_zoom_bounds
+    states = simpledialog.askstring("Zoom", "Enter German states to zoom into (comma-separated):")
+    if not states:
+        return
+    state_list = [state.strip() for state in states.split(",")]
+
+    # Filter the map to only include the selected states
+    filtered_states = germany[germany['name'].isin(state_list)]
+    if filtered_states.empty:
+        messagebox.showerror("Error", "No matching states found. Please enter valid German state names.")
+        return
+
+    # Ensure CRS consistency and resolve alignment issues
+    filtered_states = filtered_states.to_crs(epsg=4326)
+
+    ax.clear()
+    ax.set_facecolor('#F5F5F5')
+    filtered_states.boundary.plot(ax=ax, linewidth=0.8, color='#CCCCCC')
+
+    # Plot cities and connections within the selected states
+    for city, coord in cities.items():
+        point = GeoSeries([gpd.points_from_xy([coord[0]], [coord[1]])[0]], crs="EPSG:4326")
+        if any(filtered_states.geometry.contains(point.iloc[0])):
+            ax.plot(coord[0], coord[1], marker='o', markersize=12,
+                    markeredgecolor='black', markerfacecolor='white')
+
+    for i, (city1, city2) in enumerate(connections):
+        if city1 in cities and city2 in cities:
+            line = LineString([cities[city1], cities[city2]])
+            point1 = GeoSeries([gpd.points_from_xy([cities[city1][0]], [cities[city1][1]])[0]], crs="EPSG:4326")
+            point2 = GeoSeries([gpd.points_from_xy([cities[city2][0]], [cities[city2][1]])[0]], crs="EPSG:4326")
+            if any(filtered_states.geometry.contains(point1.iloc[0])) and any(filtered_states.geometry.contains(point2.iloc[0])):
+                color = connection_colors[i % len(connection_colors)]
+                ax.plot(*line.xy, color=color, linewidth=2.5, linestyle='-', alpha=0.9)
+
+    # Set and store the current zoom bounds
+    current_zoom_bounds = filtered_states.total_bounds
+    ax.set_xlim(current_zoom_bounds[0], current_zoom_bounds[2])
+    ax.set_ylim(current_zoom_bounds[1], current_zoom_bounds[3])
     ax.axis('off')
     canvas.draw()
 
@@ -606,8 +669,68 @@ def integrate_ui_with_plot():
     menu_bar.add_cascade(label="Export", menu=export_menu)
     export_menu.add_command(label="Export as DIN A4 PDF", command=lambda: export_plot_as_pdf(fig))
 
+    # Add a menu entry to zoom into one or several German states and reset zoom
+    zoom_menu = tk.Menu(menu_bar, tearoff=0)
+    menu_bar.add_cascade(label="Zoom", menu=zoom_menu)
+
+    # Function to zoom into selected states
+    def zoom_into_states():
+        global current_zoom_bounds
+        states = simpledialog.askstring("Zoom", "Enter German states to zoom into (comma-separated):")
+        if not states:
+            return
+        state_list = [state.strip() for state in states.split(",")]
+
+        # Filter the map to only include the selected states
+        filtered_states = germany[germany['name'].isin(state_list)]
+        if filtered_states.empty:
+            messagebox.showerror("Error", "No matching states found. Please enter valid German state names.")
+            return
+
+        # Ensure CRS consistency and resolve alignment issues
+        filtered_states = filtered_states.to_crs(epsg=4326)
+
+        ax.clear()
+        ax.set_facecolor('#F5F5F5')
+        filtered_states.boundary.plot(ax=ax, linewidth=0.8, color='#CCCCCC')
+
+        # Plot cities and connections within the selected states
+        for city, coord in cities.items():
+            point = GeoSeries([gpd.points_from_xy([coord[0]], [coord[1]])[0]], crs="EPSG:4326")
+            if any(filtered_states.geometry.contains(point.iloc[0])):
+                ax.plot(coord[0], coord[1], marker='o', markersize=12,
+                        markeredgecolor='black', markerfacecolor='white')
+
+        for i, (city1, city2) in enumerate(connections):
+            if city1 in cities and city2 in cities:
+                line = LineString([cities[city1], cities[city2]])
+                point1 = GeoSeries([gpd.points_from_xy([cities[city1][0]], [cities[city1][1]])[0]], crs="EPSG:4326")
+                point2 = GeoSeries([gpd.points_from_xy([cities[city2][0]], [cities[city2][1]])[0]], crs="EPSG:4326")
+                if any(filtered_states.geometry.contains(point1.iloc[0])) and any(filtered_states.geometry.contains(point2.iloc[0])):
+                    color = connection_colors[i % len(connection_colors)]
+                    ax.plot(*line.xy, color=color, linewidth=2.5, linestyle='-', alpha=0.9)
+
+        # Set and store the current zoom bounds
+        current_zoom_bounds = filtered_states.total_bounds
+        ax.set_xlim(current_zoom_bounds[0], current_zoom_bounds[2])
+        ax.set_ylim(current_zoom_bounds[1], current_zoom_bounds[3])
+        ax.axis('off')
+        canvas.draw()
+
+    # Function to reset zoom to the full map
+    def reset_zoom():
+        global current_zoom_bounds
+        current_zoom_bounds = None
+        update_plot(canvas, ax, fig)
+
+    zoom_menu.add_command(label="Zoom into States", command=zoom_into_states)
+    zoom_menu.add_command(label="Reset Zoom", command=reset_zoom)
+
     # Add a menu entry to manually update the plot
-    menu_bar.add_command(label="Update Plot", command=lambda: update_plot(canvas, ax, fig))
+    menu_bar.add_command(label="Update Plot", command=lambda: [update_plot(canvas, ax, fig), reset_zoom()])
+
+    # Add a new menu entry for "Update Plot Zoomed In"
+    menu_bar.add_command(label="Update Plot Zoomed In", command=lambda: update_plot(canvas, ax, fig))
 
     # Create a frame for the plot
     plot_frame = tk.Frame(integrated_window)
