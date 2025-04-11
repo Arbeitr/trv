@@ -373,36 +373,26 @@ def get_travel_time(city1, city2):
 
 # Function to dynamically adjust travel time label positions to avoid overlap with city labels
 def adjust_travel_time_labels(ax, cities, connections):
-    label_positions = {}  # Store positions of city labels to avoid overlap
-
-    # Record city label positions
-    for city, (x, y) in cities.items():
-        label_positions[city] = (x, y + 0.2)  # Assume city labels are placed slightly above the city marker
-
-    # Adjust travel time labels
+    # Ensure only one travel time label is displayed
+    existing_labels = set()
     for city1, city2 in connections:
-        x1, y1 = cities[city1]
-        x2, y2 = cities[city2]
+        if city1 not in cities or city2 not in cities:
+            continue
+
+        travel_time = get_travel_time(city1, city2)
+        if travel_time in existing_labels:
+            continue  # Skip if the label already exists
+
+        existing_labels.add(travel_time)
 
         # Calculate the midpoint of the line
+        x1, y1 = cities[city1]
+        x2, y2 = cities[city2]
         mid_x = (x1 + x2) / 2
         mid_y = (y1 + y2) / 2
 
-        # Calculate a small offset along the line to move the label further from city labels
-        offset_factor = 0.1  # Adjust this factor to control the distance of the label from the midpoint
-        dx = x2 - x1
-        dy = y2 - y1
-        length = (dx**2 + dy**2)**0.5
-        offset_x = offset_factor * (dx / length)
-        offset_y = offset_factor * (dy / length)
-
-        # Adjust the label position to avoid overlap with city labels
-        label_x = mid_x + offset_x
-        label_y = mid_y + offset_y
-
         # Draw the travel time label
-        travel_time = get_travel_time(city1, city2)
-        ax.text(label_x, label_y, travel_time, fontsize=8, fontfamily='sans-serif',
+        ax.text(mid_x, mid_y, travel_time, fontsize=8, fontfamily='sans-serif',
                 fontweight='bold', color='black', bbox=dict(facecolor='white', edgecolor='none', boxstyle='round,pad=0.2'),
                 zorder=11)
 
