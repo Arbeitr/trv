@@ -329,16 +329,24 @@ def get_travel_time(city1, city2):
     minutes = travel_time % 60
     return f"{hours}h {minutes}m" if hours > 0 else f"{minutes} min"
 
-# Function to add a legend below the map
-# Ensure the legend is cleared before adding a new one
+# Function to add a transit-style legend below the map
+# Adjusted to include travel time for each city-item and total travel time
 def add_legend(ax, fig):
     # Clear any existing legends
-    fig.legends = []
+    for child in fig.get_children():
+        if isinstance(child, plt.Axes) and child != ax:
+            child.remove()
 
-    legend_elements = []
+    # Define the starting position for the legend items
+    x_position = 0.1  # Fixed x position for stacking
+    y_start = -0.1  # Start below the map
+    y_decrement = 0.05  # Vertical spacing between items
+
     total_travel_time = 0
+
+    # Draw the transit-style legend directly on the main figure
     for i, (city1, city2) in enumerate(connections):
-        color = connection_colors[i % len(connection_colors)]
+        # Calculate travel time
         travel_time = get_travel_time(city1, city2)
         if isinstance(travel_time, str) and 'min' in travel_time:
             time_in_minutes = int(travel_time.split()[0])
@@ -348,14 +356,28 @@ def add_legend(ax, fig):
         else:
             time_in_minutes = 0
         total_travel_time += time_in_minutes
-        legend_elements.append(plt.Line2D([0], [0], color=color, lw=2, label=f"{city1} -> {city2} ({travel_time})"))
 
+        # Draw the line connecting the stations
+        if i > 0:
+            ax.plot([x_position, x_position], [y_start + y_decrement, y_start],
+                    color=connection_colors[i % len(connection_colors)], linewidth=2.5, transform=ax.transAxes, clip_on=False)
+
+        # Draw the station symbol (white dot with black outline)
+        ax.plot(x_position, y_start, marker='o', markersize=10,
+                markeredgecolor='black', markerfacecolor='white', transform=ax.transAxes, clip_on=False)
+
+        # Add the station label with travel time
+        ax.text(x_position + 0.05, y_start, f"{city1} -> {city2} ({travel_time})",
+                fontsize=8, fontfamily='sans-serif', ha='left', transform=ax.transAxes, clip_on=False)
+
+        # Decrement the y position for the next item
+        y_start -= y_decrement
+
+    # Add total travel time at the bottom
     total_hours = total_travel_time // 60
     total_minutes = total_travel_time % 60
     total_time_str = f"Total Travel Time: {total_hours}h {total_minutes}m" if total_hours > 0 else f"Total Travel Time: {total_minutes} min"
-
-    # Create a legend below the map
-    fig.legend(handles=legend_elements, loc='lower center', fontsize='small', title=total_time_str, ncol=3, frameon=False)
+    ax.text(x_position, y_start - 0.05, total_time_str, fontsize=10, fontfamily='sans-serif', ha='left', transform=ax.transAxes, clip_on=False, fontweight='bold')
 
 # Function to update the plot dynamically
 def update_plot(canvas, ax, fig):
@@ -387,7 +409,7 @@ def update_plot(canvas, ax, fig):
                 fontweight='bold', color='black', bbox=dict(facecolor='white', edgecolor='none', boxstyle='round,pad=0.2'),
                 zorder=11)
 
-    # Add the legend below the map
+    # Add the transit-style legend below the map
     add_legend(ax, fig)
 
     ax.set_xlim(5, 15)
