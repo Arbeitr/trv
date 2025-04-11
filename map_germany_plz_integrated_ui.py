@@ -98,15 +98,16 @@ def add_connection_dialog():
     add_window.title("Add Connection")
 
     tk.Label(add_window, text="Select the first city:").grid(row=0, column=0, padx=5, pady=5)
+    # Sort the entries in the drop-down menus alphabetically
     city1_var = tk.StringVar(add_window)
-    city1_var.set(list(cities.keys())[0])
-    city1_menu = tk.OptionMenu(add_window, city1_var, *cities.keys())
+    city1_var.set(sorted(cities.keys())[0])  # Set the first city alphabetically
+    city1_menu = tk.OptionMenu(add_window, city1_var, *sorted(cities.keys()))
     city1_menu.grid(row=0, column=1, padx=5, pady=5)
 
     tk.Label(add_window, text="Select the second city:").grid(row=0, column=2, padx=5, pady=5)
     city2_var = tk.StringVar(add_window)
-    city2_var.set(list(cities.keys())[1])
-    city2_menu = tk.OptionMenu(add_window, city2_var, *cities.keys())
+    city2_var.set(sorted(cities.keys())[1])  # Set the second city alphabetically
+    city2_menu = tk.OptionMenu(add_window, city2_var, *sorted(cities.keys()))
     city2_menu.grid(row=0, column=3, padx=5, pady=5)
 
     def create_connection():
