@@ -330,7 +330,7 @@ def get_travel_time(city1, city2):
     return f"{hours}h {minutes}m" if hours > 0 else f"{minutes} min"
 
 # Function to add separate legends for unconnected chains of cities
-# Adjusted to place legends beside each other if they overlap
+# Adjusted to keep connection lines between city-items in the legend
 def add_legend(ax, fig):
     # Clear any existing legends
     for child in fig.get_children():
@@ -368,21 +368,9 @@ def add_legend(ax, fig):
         # Calculate the x and y positions for the current chain
         x_position = x_start + (chain_index * x_increment)
         chain_y_start = y_start
-        total_travel_time = 0
 
         # Draw the legend for this chain
         for i, (city1, city2) in enumerate(chain):
-            # Calculate travel time
-            travel_time = get_travel_time(city1, city2)
-            if isinstance(travel_time, str) and 'min' in travel_time:
-                time_in_minutes = int(travel_time.split()[0])
-            elif isinstance(travel_time, str) and 'h' in travel_time:
-                hours, minutes = map(int, travel_time.replace('h', '').replace('m', '').split())
-                time_in_minutes = hours * 60 + minutes
-            else:
-                time_in_minutes = 0
-            total_travel_time += time_in_minutes
-
             # Draw the line connecting the stations
             if i > 0:
                 ax.plot([x_position, x_position], [chain_y_start + y_decrement, chain_y_start],
@@ -392,18 +380,16 @@ def add_legend(ax, fig):
             ax.plot(x_position, chain_y_start, marker='o', markersize=10,
                     markeredgecolor='black', markerfacecolor='white', transform=ax.transAxes, clip_on=False)
 
-            # Add the station label with travel time
-            ax.text(x_position + 0.05, chain_y_start, f"{city1} -> {city2} ({travel_time})",
-                    fontsize=8, fontfamily='sans-serif', ha='left', transform=ax.transAxes, clip_on=False)
+            # Add the city label
+            ax.text(x_position + 0.05, chain_y_start, city1,
+                    fontsize=8, fontfamily='sans-serif', ha='left', transform=ax.transAxes, clip_on=False, wrap=True, bbox=dict(facecolor='white', edgecolor='none', boxstyle='round,pad=0.2'))
 
             # Decrement the y position for the next item
             chain_y_start -= y_decrement
 
-        # Add total travel time for this chain
-        total_hours = total_travel_time // 60
-        total_minutes = total_travel_time % 60
-        total_time_str = f"Total Travel Time: {total_hours}h {total_minutes}m" if total_hours > 0 else f"Total Travel Time: {total_minutes} min"
-        ax.text(x_position, chain_y_start - 0.05, total_time_str, fontsize=10, fontfamily='sans-serif', ha='left', transform=ax.transAxes, clip_on=False, fontweight='bold')
+        # Add a separator or title for the chain
+        ax.text(x_position, chain_y_start - 0.05, f"Chain {chain_index + 1}",
+                fontsize=10, fontfamily='sans-serif', ha='left', transform=ax.transAxes, clip_on=False, fontweight='bold', bbox=dict(facecolor='lightgrey', edgecolor='none', boxstyle='round,pad=0.3'))
 
 # Function to update the plot dynamically
 def update_plot(canvas, ax, fig):
