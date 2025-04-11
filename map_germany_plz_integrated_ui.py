@@ -453,9 +453,6 @@ def update_plot(canvas, ax, fig):
     # Call the adjust_city_labels function to apply label adjustments
     adjust_city_labels(ax, cities, clusters, connections)
 
-    # Add the transit-style legend below the map
-    add_legend(ax, fig)
-
     ax.set_xlim(5, 15)
     ax.set_ylim(47, 55)
     ax.axis('off')
@@ -466,6 +463,7 @@ def export_plot_as_pdf(fig):
     export_path = os.path.join("export", "Plot_DIN_A4.pdf")
     with PdfPages(export_path) as pdf:
         fig.set_size_inches(8.27, 11.69)  # Set size to DIN A4 dimensions in inches
+        add_legend(ax, fig)  # Add the legend only during export
         pdf.savefig(fig, bbox_inches='tight')
     messagebox.showinfo("Export Success", f"Plot exported successfully to {export_path}.")
 
