@@ -330,7 +330,7 @@ def get_travel_time(city1, city2):
     return f"{hours}h {minutes}m" if hours > 0 else f"{minutes} min"
 
 # Function to add separate legends for unconnected chains of cities
-# Adjusted to keep connection lines between city-items in the legend
+# Adjusted to include total travel time for each chain
 def add_legend(ax, fig):
     # Clear any existing legends
     for child in fig.get_children():
@@ -369,6 +369,8 @@ def add_legend(ax, fig):
         x_position = x_start + (chain_index * x_increment)
         chain_y_start = y_start
 
+        total_travel_time = 0  # Initialize total travel time for the chain
+
         # Draw the legend for this chain
         for i, (city1, city2) in enumerate(chain):
             # Draw the line connecting the stations
@@ -384,11 +386,26 @@ def add_legend(ax, fig):
             ax.text(x_position + 0.05, chain_y_start, city1,
                     fontsize=8, fontfamily='sans-serif', ha='left', transform=ax.transAxes, clip_on=False, wrap=True, bbox=dict(facecolor='white', edgecolor='none', boxstyle='round,pad=0.2'))
 
+            # Calculate and accumulate travel time for the chain
+            travel_time = get_travel_time(city1, city2)
+            if travel_time != "N/A":
+                hours, minutes = 0, 0
+                if "h" in travel_time:
+                    time_parts = travel_time.split("h")
+                    hours = int(time_parts[0].strip())
+                    minutes = int(time_parts[1].replace("m", "").strip()) if "m" in time_parts[1] else 0
+                elif "min" in travel_time:
+                    minutes = int(travel_time.replace("min", "").strip())
+                total_travel_time += hours * 60 + minutes
+
             # Decrement the y position for the next item
             chain_y_start -= y_decrement
 
         # Add a separator or title for the chain
-        ax.text(x_position, chain_y_start - 0.05, f"Chain {chain_index + 1}",
+        total_hours = total_travel_time // 60
+        total_minutes = total_travel_time % 60
+        total_time_str = f"Total: {total_hours}h {total_minutes}m" if total_hours > 0 else f"Total: {total_minutes} min"
+        ax.text(x_position, chain_y_start - 0.05, f"Route {chain_index + 1} ({total_time_str})",
                 fontsize=10, fontfamily='sans-serif', ha='left', transform=ax.transAxes, clip_on=False, fontweight='bold', bbox=dict(facecolor='lightgrey', edgecolor='none', boxstyle='round,pad=0.3'))
 
 # Function to update the plot dynamically
