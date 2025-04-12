@@ -69,9 +69,13 @@ connection_colors = [
     "#858379", "#646973"
 ]
 
-# Add a unique ID to each city and connection
+# Assign unique IDs to states and create bounding boxes
+state_ids = {state: f"state_{i}" for i, state in enumerate(germany['name'])}
+germany['state_id'] = germany['name'].map(state_ids)
+germany['bounding_box'] = germany.geometry.apply(lambda geom: geom.bounds)
+
+# Assign unique IDs to cities
 city_ids = {city: f"city_{i}" for i, city in enumerate(cities.keys())}
-connection_ids = {connection: f"conn_{i}" for i, connection in enumerate(connections)}
 
 # Update the add_city function to assign a unique ID
 def add_city():
@@ -122,7 +126,6 @@ def add_connection_dialog():
             messagebox.showerror("Error", "This connection already exists.")
             return
         connections.append((city1, city2))
-        connection_ids[(city1, city2)] = f"conn_{len(connection_ids)}"  # Assign a unique ID
         messagebox.showinfo("Success", f"Connection added between {city1} and {city2}!")
         add_window.destroy()
         # Update the plot dynamically
@@ -135,6 +138,42 @@ def add_connection_dialog():
 add_connection_button = tk.Button(root, text="Add Connection")
 add_connection_button.pack(pady=5)
 add_connection_button.config(command=add_connection_dialog)
+
+# Add a debug feature to check functionality
+import logging
+
+# Configure logging for debugging
+logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(levelname)s - %(message)s')
+
+def debug_functionality():
+    logging.debug("Starting debug checks...")
+
+    # Check if all cities are plotted
+    for city, coord in cities.items():
+        logging.debug(f"Checking city: {city} at coordinates {coord}")
+        point = GeoSeries([gpd.points_from_xy([coord[0]], [coord[1]])[0]], crs="EPSG:4326")
+        if not any(germany.geometry.contains(point.iloc[0])):
+            logging.warning(f"City '{city}' is outside the map boundaries.")
+
+    # Check if all connections are valid
+    for city1, city2 in connections:
+        if city1 not in cities or city2 not in cities:
+            logging.error(f"Invalid connection: {city1} -> {city2}")
+        else:
+            logging.debug(f"Valid connection: {city1} -> {city2}")
+
+    # Check if labels are correctly hidden outside selected states
+    if 'filtered_states' in globals():
+        verify_labels_hidden(filtered_states)
+    else:
+        logging.info("No filtered states to verify labels against.")
+
+    logging.debug("Debug checks completed.")
+
+# Add a menu entry to trigger the debug feature
+menu_bar = tk.Menu(root)
+root.config(menu=menu_bar)
+menu_bar.add_command(label="Run Debug Checks", command=debug_functionality)
 
 # Add a debug parameter to visualize cluster radius
 # Function to handle labels for congested areas with many cities
@@ -434,9 +473,19 @@ def adjust_city_labels(ax, cities, clusters, connections, debug=False):
 global current_zoom_bounds
 current_zoom_bounds = None
 
+# Ensure `filtered_states` is globally accessible
+filtered_states = None  # Initialize as None globally
+
 # Update the update_plot function to use the current zoom bounds if available
 def update_plot(canvas, ax, fig):
-    global current_zoom_bounds
+    global current_zoom_bounds, filtered_states
+
+    # Debugging: Log the current zoom bounds
+    if current_zoom_bounds is not None:
+        logging.debug(f"Restoring zoom bounds: {current_zoom_bounds}")
+    else:
+        logging.debug("No zoom bounds to restore. Defaulting to full map view.")
+
     ax.clear()
     ax.set_facecolor('#F5F5F5')
     germany.boundary.plot(ax=ax, linewidth=0.8, color='#CCCCCC')
@@ -468,42 +517,81 @@ def update_plot(canvas, ax, fig):
         ax.set_xlim(5, 15)
         ax.set_ylim(47, 55)
 
+    # Debugging: Verify labels after update
+    verify_labels_hidden()
+
     ax.axis('off')
     canvas.draw()
 
 # Update the reset_zoom function to clear the current zoom bounds
 def reset_zoom():
     global current_zoom_bounds
+    logging.info("Reset zoom feature triggered.")
     current_zoom_bounds = None
     update_plot(canvas, ax, fig)
+    logging.info("Zoom reset to full map view.")
 
-# Update the zoom_into_states function to set the current zoom bounds
+# Update the zoom_into_states function to include log messages
 def zoom_into_states():
-    global current_zoom_bounds
+    global current_zoom_bounds, filtered_states
+    logging.info("Zoom into states feature triggered.")
     states = simpledialog.askstring("Zoom", "Enter German states to zoom into (comma-separated):")
     if not states:
+        logging.warning("No states entered for zooming.")
         return
     state_list = [state.strip() for state in states.split(",")]
+    logging.debug(f"States entered for zooming: {state_list}")
 
     # Filter the map to only include the selected states
     filtered_states = germany[germany['name'].isin(state_list)]
     if filtered_states.empty:
+        logging.error("No matching states found for the entered names.")
         messagebox.showerror("Error", "No matching states found. Please enter valid German state names.")
         return
 
+    logging.info("Matching states found. Proceeding with zoom.")
+
     # Ensure CRS consistency and resolve alignment issues
     filtered_states = filtered_states.to_crs(epsg=4326)
+    logging.debug("CRS consistency ensured for filtered states.")
 
     ax.clear()
     ax.set_facecolor('#F5F5F5')
-    filtered_states.boundary.plot(ax=ax, linewidth=0.8, color='#CCCCCC')
+    # Clip the map to the selected states to hide anything outside their borders
+    clipped_map = gpd.clip(germany, filtered_states.geometry)
+    clipped_map.boundary.plot(ax=ax, linewidth=0.8, color='#CCCCCC')
+    logging.info("Map clipped to selected states.")
 
     # Plot cities and connections within the selected states
     for city, coord in cities.items():
         point = GeoSeries([gpd.points_from_xy([coord[0]], [coord[1]])[0]], crs="EPSG:4326")
-        if any(filtered_states.geometry.contains(point.iloc[0])):
+        label_id = city_ids[city]  # Use the unique label ID for each city
+
+        # Check if the city is within the bounding box of any selected state
+        within_bounding_box = filtered_states['bounding_box'].apply(
+            lambda bbox: bbox[0] <= coord[0] <= bbox[2] and bbox[1] <= coord[1] <= bbox[3]
+        ).any()
+
+        if within_bounding_box:
             ax.plot(coord[0], coord[1], marker='o', markersize=12,
                     markeredgecolor='black', markerfacecolor='white')
+            ax.text(coord[0], coord[1], city, fontsize=10, fontfamily='sans-serif',
+                    fontweight='bold', color='white',
+                    bbox=dict(facecolor='darkgrey', edgecolor='none', boxstyle='round,pad=0.3'),
+                    zorder=10, gid=label_id)  # Assign the label ID to the text object
+            logging.debug(f"City '{city}' plotted within the selected states.")
+        else:
+            # Hide city label
+            for text in ax.texts:
+                if text.get_gid() == label_id:
+                    text.set_visible(False)
+                    logging.debug(f"City label for '{city}' hidden as it is outside the selected states.")
+
+            # Hide time labels associated with the city
+            for text in ax.texts:
+                if text.get_text() in travel_times_data and not within_bounding_box:
+                    text.set_visible(False)
+                    logging.debug(f"Time label for '{city}' hidden as it is outside the selected states.")
 
     for i, (city1, city2) in enumerate(connections):
         if city1 in cities and city2 in cities:
@@ -513,13 +601,37 @@ def zoom_into_states():
             if any(filtered_states.geometry.contains(point1.iloc[0])) and any(filtered_states.geometry.contains(point2.iloc[0])):
                 color = connection_colors[i % len(connection_colors)]
                 ax.plot(*line.xy, color=color, linewidth=2.5, linestyle='-', alpha=0.9)
+                logging.debug(f"Connection between '{city1}' and '{city2}' plotted within the selected states.")
 
     # Set and store the current zoom bounds
     current_zoom_bounds = filtered_states.total_bounds
     ax.set_xlim(current_zoom_bounds[0], current_zoom_bounds[2])
     ax.set_ylim(current_zoom_bounds[1], current_zoom_bounds[3])
+    logging.info(f"Zoom bounds set to: {current_zoom_bounds}")
     ax.axis('off')
     canvas.draw()
+    logging.info("Zoom into states completed.")
+
+# Update the verify_labels_hidden function to not require arguments
+def verify_labels_hidden():
+    global filtered_states
+    if filtered_states is None:
+        logging.warning("No filtered states available to verify labels.")
+        return
+
+    for text in ax.texts:
+        label_coords = (text.get_position()[0], text.get_position()[1])
+        point = GeoSeries([gpd.points_from_xy([label_coords[0]], [label_coords[1]])[0]], crs="EPSG:4326")
+
+        # Debugging: Log the label being checked
+        logging.debug(f"Checking label '{text.get_text()}' at coordinates {label_coords}")
+
+        if not filtered_states.geometry.apply(lambda geom: point.iloc[0].within(geom)).any():
+            text.set_visible(False)  # Hide the label
+            logging.debug(f"Label '{text.get_text()}' is outside the selected states and has been hidden.")
+        else:
+            text.set_visible(True)  # Ensure the label is visible if within the states
+            logging.debug(f"Label '{text.get_text()}' is within the selected states and remains visible.")
 
 # Function to export the plot as a DIN A4 PDF
 def export_plot_as_pdf(fig):
@@ -675,31 +787,65 @@ def integrate_ui_with_plot():
 
     # Function to zoom into selected states
     def zoom_into_states():
-        global current_zoom_bounds
+        global current_zoom_bounds, filtered_states
+        logging.info("Zoom into states feature triggered.")
         states = simpledialog.askstring("Zoom", "Enter German states to zoom into (comma-separated):")
         if not states:
+            logging.warning("No states entered for zooming.")
             return
         state_list = [state.strip() for state in states.split(",")]
+        logging.debug(f"States entered for zooming: {state_list}")
 
         # Filter the map to only include the selected states
         filtered_states = germany[germany['name'].isin(state_list)]
         if filtered_states.empty:
+            logging.error("No matching states found for the entered names.")
             messagebox.showerror("Error", "No matching states found. Please enter valid German state names.")
             return
 
+        logging.info("Matching states found. Proceeding with zoom.")
+
         # Ensure CRS consistency and resolve alignment issues
         filtered_states = filtered_states.to_crs(epsg=4326)
+        logging.debug("CRS consistency ensured for filtered states.")
 
         ax.clear()
         ax.set_facecolor('#F5F5F5')
-        filtered_states.boundary.plot(ax=ax, linewidth=0.8, color='#CCCCCC')
+        # Clip the map to the selected states to hide anything outside their borders
+        clipped_map = gpd.clip(germany, filtered_states.geometry)
+        clipped_map.boundary.plot(ax=ax, linewidth=0.8, color='#CCCCCC')
+        logging.info("Map clipped to selected states.")
 
         # Plot cities and connections within the selected states
         for city, coord in cities.items():
             point = GeoSeries([gpd.points_from_xy([coord[0]], [coord[1]])[0]], crs="EPSG:4326")
-            if any(filtered_states.geometry.contains(point.iloc[0])):
+            label_id = city_ids[city]  # Use the unique label ID for each city
+
+            # Check if the city is within the bounding box of any selected state
+            within_bounding_box = filtered_states['bounding_box'].apply(
+                lambda bbox: bbox[0] <= coord[0] <= bbox[2] and bbox[1] <= coord[1] <= bbox[3]
+            ).any()
+
+            if within_bounding_box:
                 ax.plot(coord[0], coord[1], marker='o', markersize=12,
                         markeredgecolor='black', markerfacecolor='white')
+                ax.text(coord[0], coord[1], city, fontsize=10, fontfamily='sans-serif',
+                        fontweight='bold', color='white',
+                        bbox=dict(facecolor='darkgrey', edgecolor='none', boxstyle='round,pad=0.3'),
+                        zorder=10, gid=label_id)  # Assign the label ID to the text object
+                logging.debug(f"City '{city}' plotted within the selected states.")
+            else:
+                # Hide city label
+                for text in ax.texts:
+                    if text.get_gid() == label_id:
+                        text.set_visible(False)
+                        logging.debug(f"City label for '{city}' hidden as it is outside the selected states.")
+
+                # Hide time labels associated with the city
+                for text in ax.texts:
+                    if text.get_text() in travel_times_data and not within_bounding_box:
+                        text.set_visible(False)
+                        logging.debug(f"Time label for '{city}' hidden as it is outside the selected states.")
 
         for i, (city1, city2) in enumerate(connections):
             if city1 in cities and city2 in cities:
@@ -709,19 +855,24 @@ def integrate_ui_with_plot():
                 if any(filtered_states.geometry.contains(point1.iloc[0])) and any(filtered_states.geometry.contains(point2.iloc[0])):
                     color = connection_colors[i % len(connection_colors)]
                     ax.plot(*line.xy, color=color, linewidth=2.5, linestyle='-', alpha=0.9)
+                    logging.debug(f"Connection between '{city1}' and '{city2}' plotted within the selected states.")
 
         # Set and store the current zoom bounds
         current_zoom_bounds = filtered_states.total_bounds
         ax.set_xlim(current_zoom_bounds[0], current_zoom_bounds[2])
         ax.set_ylim(current_zoom_bounds[1], current_zoom_bounds[3])
+        logging.info(f"Zoom bounds set to: {current_zoom_bounds}")
         ax.axis('off')
         canvas.draw()
+        logging.info("Zoom into states completed.")
 
     # Function to reset zoom to the full map
     def reset_zoom():
         global current_zoom_bounds
+        logging.info("Reset zoom feature triggered.")
         current_zoom_bounds = None
         update_plot(canvas, ax, fig)
+        logging.info("Zoom reset to full map view.")
 
     zoom_menu.add_command(label="Zoom into States", command=zoom_into_states)
     zoom_menu.add_command(label="Reset Zoom", command=reset_zoom)
@@ -777,4 +928,9 @@ remove_default_cities_button = tk.Button(root, text="Remove Default Cities", com
 remove_default_cities_button.pack(pady=5)
 remove_route_button = tk.Button(root, text="Remove Route", command=remove_route_dialog)
 remove_route_button.pack(pady=5)
+
+# Remove font-related log messages by adjusting Matplotlib's logging level
+import logging
+logging.getLogger('matplotlib').setLevel(logging.WARNING)
+
 root.mainloop()
