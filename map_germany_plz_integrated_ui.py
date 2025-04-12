@@ -175,12 +175,18 @@ menu_bar = tk.Menu(root)
 root.config(menu=menu_bar)
 menu_bar.add_command(label="Run Debug Checks", command=debug_functionality)
 
-# Add a debug parameter to visualize cluster radius
-# Function to handle labels for congested areas with many cities
-# Uses color-coded clusters and combined labels for better visualization
+# Adjust the cluster radius dynamically based on zoom level
+def adjust_cluster_radius(zoom_bounds):
+    if zoom_bounds is None:
+        return 1.0  # Default radius
+    zoom_width = zoom_bounds[2] - zoom_bounds[0]
+    zoom_height = zoom_bounds[3] - zoom_bounds[1]
+    # Smaller zoom area means higher zoom level, so reduce the radius
+    return max(0.1, min(1.0, (zoom_width + zoom_height) / 20))
 
-def handle_congested_areas(ax, cities, debug=False):
-    cluster_radius = 1.0  # Reduced radius to group cities into clusters more frequently
+# Update the handle_congested_areas function to accept a dynamic radius
+def handle_congested_areas(ax, cities, zoom_bounds=None, debug=False):
+    cluster_radius = adjust_cluster_radius(zoom_bounds)
     clusters = []
 
     # Group cities into clusters based on proximity
@@ -503,8 +509,8 @@ def update_plot(canvas, ax, fig):
     # Adjust travel time labels to avoid overlap
     adjust_travel_time_labels(ax, cities, connections)
 
-    # Use the new congestion handling system
-    clusters, clustered_cities = handle_congested_areas(ax, cities)
+    # Use the new congestion handling system with dynamic radius
+    clusters, clustered_cities = handle_congested_areas(ax, cities, current_zoom_bounds)
 
     # Call the adjust_city_labels function to apply label adjustments
     adjust_city_labels(ax, cities, clusters, connections)
