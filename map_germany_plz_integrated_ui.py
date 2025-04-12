@@ -529,7 +529,10 @@ def reset_zoom():
     logging.info("Reset zoom feature triggered.")
     current_zoom_bounds = None
     update_plot(canvas, ax, fig)
-    logging.info("Zoom reset to full map view.")
+    # Ensure all labels reappear when reset zoom is clicked
+    for text in ax.texts:
+        text.set_visible(True)  # Make all labels visible again
+    logging.info("All labels have been made visible after resetting zoom.")
 
 # Update the zoom_into_states function to include log messages
 def zoom_into_states():
@@ -872,7 +875,10 @@ def integrate_ui_with_plot():
         logging.info("Reset zoom feature triggered.")
         current_zoom_bounds = None
         update_plot(canvas, ax, fig)
-        logging.info("Zoom reset to full map view.")
+        # Ensure all labels reappear when reset zoom is clicked
+        for text in ax.texts:
+            text.set_visible(True)  # Make all labels visible again
+        logging.info("All labels have been made visible after resetting zoom.")
 
     zoom_menu.add_command(label="Zoom into States", command=zoom_into_states)
     zoom_menu.add_command(label="Reset Zoom", command=reset_zoom)
@@ -881,7 +887,7 @@ def integrate_ui_with_plot():
     menu_bar.add_command(label="Update Plot", command=lambda: [update_plot(canvas, ax, fig), reset_zoom()])
 
     # Add a new menu entry for "Update Plot Zoomed In"
-    menu_bar.add_command(label="Update Plot Zoomed In", command=lambda: update_plot(canvas, ax, fig))
+    menu_bar.add_command(label="Update Plot (Selected State)", command=lambda: update_plot(canvas, ax, fig))
 
     # Create a frame for the plot
     plot_frame = tk.Frame(integrated_window)
