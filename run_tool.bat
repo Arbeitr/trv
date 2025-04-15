@@ -8,9 +8,6 @@ if %errorlevel% neq 0 (
     exit /b 1
 )
 
-REM Navigate to the script directory
-cd /d e:\temp_map_train
-
 REM Execute the Python script
 python map_germany_plz_integrated_ui.py
 
