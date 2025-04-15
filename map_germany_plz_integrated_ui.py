@@ -77,6 +77,57 @@ TRAIN_ROUTES_TYPE = {
 # Default train type for connections not explicitly defined
 DEFAULT_TRAIN_TYPE = "RE"
 
+# Add these constants at the top of the file with other constants
+ROUTE_COMPLEXITY_FACTOR = 1.2  # Average route is ~20% longer than straight-line distance
+STATION_STOP_MINUTES = {
+    "ICE": 2,   # High-speed trains have shorter stops
+    "IC": 3,    # Inter-city trains have medium stops
+    "RE": 3,    # Regional express trains have medium stops
+    "RB": 4     # Regional trains have longer stops
+}
+TYPICAL_STATIONS_PER_100KM = {
+    "ICE": 0.5,  # High-speed trains have fewer stops
+    "IC": 1,     # Inter-city trains have more stops
+    "RE": 2,     # Regional express trains have even more stops
+    "RB": 3      # Regional trains have the most stops
+}
+GEOGRAPHIC_FACTORS = {
+    # Regions with hills/mountains have slower average speeds
+    "FLAT": 1.0,      # No adjustment for flat terrain
+    "HILLS": 1.15,    # 15% slower in hilly areas
+    "MOUNTAINS": 1.3, # 30% slower in mountainous areas
+    "URBAN": 1.2      # 20% slower in dense urban areas
+}
+
+# Route evaluation factors - how curved/indirect is the route between cities
+# These factors adjust the direct Haversine distance to account for actual rail paths
+ROUTE_CURVATURE_FACTORS = {
+    "ICE": 1.1,  # High-speed routes are generally straighter
+    "IC": 1.15,  # Inter-city routes are relatively direct
+    "RE": 1.25,  # Regional express routes often have more curves
+    "RB": 1.35   # Regional train routes tend to be the most indirect
+}
+
+# Average elevation gradients for German regions (approximate)
+REGION_TOPOGRAPHY = {
+    "Bayern": "MOUNTAINS",
+    "Baden-Württemberg": "HILLS",
+    "Hessen": "HILLS",
+    "Thüringen": "HILLS",
+    "Sachsen": "HILLS",
+    "Rheinland-Pfalz": "HILLS",
+    "Saarland": "HILLS",
+    "Nordrhein-Westfalen": "FLAT",
+    "Niedersachsen": "FLAT",
+    "Bremen": "FLAT",
+    "Hamburg": "FLAT",
+    "Schleswig-Holstein": "FLAT",
+    "Mecklenburg-Vorpommern": "FLAT",
+    "Brandenburg": "FLAT",
+    "Berlin": "URBAN",
+    "Sachsen-Anhalt": "FLAT"
+}
+
 AVERAGE_TRAIN_SPEED_KMH = 100
 EARTH_RADIUS_KM = 6371
 DEFAULT_X_LIM = (5, 15)
@@ -97,6 +148,18 @@ class RouteData:
         self.city_ids = {city: f"city_{i}" for i, city in enumerate(self.cities.keys())}
         self.connection_train_types = TRAIN_ROUTES_TYPE.copy()
         
+        # Add geodata access for improved calculations
+        try:
+            import geopy.geocoders
+            from geopy.extra.rate_limiter import RateLimiter
+            self.geolocator = geopy.geocoders.Nominatim(user_agent="train_route_visualizer")
+            self.geocode = RateLimiter(self.geolocator.geocode, min_delay_seconds=1)
+            self.has_geopy = True
+            logging.info("Geopy available - using enhanced geographic data for calculations")
+        except ImportError:
+            self.has_geopy = False
+            logging.info("Geopy not available - install it with 'pip install geopy' for more accurate terrain data. Using approximations for now.")
+    
     def add_city(self, postal_code):
         """Add a city based on postal code"""
         try:
@@ -178,6 +241,7 @@ class RouteData:
     
     def get_travel_time(self, city1, city2):
         """Get travel time between two cities considering train type"""
+        logging.debug(f"Calculating travel time for {city1} -> {city2}")
         if (city1, city2) in self.travel_times_data:
             # Use predefined travel time if available
             travel_time = self.travel_times_data[(city1, city2)]
@@ -189,42 +253,168 @@ class RouteData:
                                             self.get_train_type(city1, city2))
         else:
             return "N/A"
-
-        # For predefined travel times, apply train type adjustment
         train_type = self.get_train_type(city1, city2)
         adjusted_time = round(travel_time / TRAIN_TYPES[train_type]["speed_factor"])
-        
+        logging.debug(f"Predefined travel time: {travel_time} minutes")
+        logging.debug(f"Train type: {train_type}, Speed factor: {TRAIN_TYPES[train_type]['speed_factor']}")
+        logging.debug(f"Adjusted travel time: {adjusted_time} minutes")
         # Format travel time
         hours = adjusted_time // 60
         minutes = adjusted_time % 60
         return f"{hours}h {minutes}m" if hours > 0 else f"{minutes} min"
     
     def estimate_travel_time(self, coord1, coord2, train_type=DEFAULT_TRAIN_TYPE):
-        """Estimate travel time based on Haversine distance and train type"""
-        # Fix: Use the static method with RouteData prefix
-        distance_km = RouteData.haversine_distance(coord1, coord2)
+        """Estimate travel time based on multiple realistic factors"""
+        # Get base straight-line distance using the appropriate method
+        if self.has_geopy:
+            try:
+                # Use geopy for more accurate distance calculation that considers Earth's curvature
+                from geopy.distance import geodesic
+                base_distance_km = geodesic(
+                    (coord1[1], coord1[0]),  # Geopy expects (lat, lon) format
+                    (coord2[1], coord2[0])
+                ).kilometers
+                logging.debug(f"Using geopy distance: {base_distance_km:.2f} km")
+            except Exception as e:
+                logging.warning(f"Geopy distance calculation failed: {e}. Falling back to haversine.")
+                base_distance_km = self.haversine_distance(coord1, coord2)
+        else:
+            # Fall back to haversine if geopy is not available
+            base_distance_km = self.haversine_distance(coord1, coord2)
         
-        # Apply speed factor based on train type
+        # Apply route complexity factor based on train type (different types use different route networks)
+        route_curvature = ROUTE_CURVATURE_FACTORS.get(train_type, ROUTE_COMPLEXITY_FACTOR)
+        adjusted_distance = base_distance_km * route_curvature
+        
+        # 2. Account for geographic features
+        terrain_factor = self.get_terrain_factor(coord1, coord2)
+        
+        # 3. Apply speed factor based on train type
         speed_factor = TRAIN_TYPES[train_type]["speed_factor"]
-        adjusted_speed = AVERAGE_TRAIN_SPEED_KMH * speed_factor
+        adjusted_speed = AVERAGE_TRAIN_SPEED_KMH * speed_factor / terrain_factor
         
-        travel_time_hours = distance_km / adjusted_speed
-        travel_time_minutes = int(travel_time_hours * 60)
-        hours = travel_time_minutes // 60
-        minutes = travel_time_minutes % 60
+        # 4. Calculate base travel time
+        travel_time_hours = adjusted_distance / adjusted_speed
+        travel_time_minutes = travel_time_hours * 60
+        
+        # 5. Add time for station stops
+        station_stops = self.estimate_station_stops(base_distance_km, train_type)
+        stop_time_minutes = station_stops * STATION_STOP_MINUTES[train_type]
+        
+        # Total adjusted travel time
+        total_minutes = int(travel_time_minutes + stop_time_minutes)
+        
+        # Log detailed calculation for debugging
+        logging.debug(f"Enhanced travel time calculation for {coord1} -> {coord2}:")
+        logging.debug(f"  Base distance (km): {base_distance_km:.2f}")
+        logging.debug(f"  Route complexity adjustment: {ROUTE_COMPLEXITY_FACTOR}")
+        logging.debug(f"  Terrain factor: {terrain_factor}")
+        logging.debug(f"  Adjusted distance (km): {adjusted_distance:.2f}")
+        logging.debug(f"  Train speed factor: {speed_factor}")
+        logging.debug(f"  Adjusted speed (km/h): {adjusted_speed:.2f}")
+        logging.debug(f"  Base travel time (min): {travel_time_minutes:.2f}")
+        logging.debug(f"  Estimated station stops: {station_stops}")
+        logging.debug(f"  Stop time (min): {stop_time_minutes}")
+        logging.debug(f"  Total travel time (min): {total_minutes}")
+        
+        # Format travel time
+        hours = total_minutes // 60
+        minutes = total_minutes % 60
         return f"{hours}h {minutes}m" if hours > 0 else f"{minutes} min"
     
-    @staticmethod
-    def haversine_distance(coord1, coord2):
-        """Calculate Haversine distance between two coordinates"""
-        lon1, lat1 = radians(coord1[0]), radians(coord1[1])
-        lon2, lat2 = radians(coord2[0]), radians(coord2[1])
-        dlon = lon2 - lon1
-        dlat = lat2 - lat1
-        a = sin(dlat / 2)**2 + cos(lat1) * cos(lat2) * sin(dlon / 2)**2
-        c = 2 * atan2(sqrt(a), sqrt(1 - a))
-        return EARTH_RADIUS_KM * c
-
+    def get_terrain_factor(self, coord1, coord2):
+        """Determine the terrain factor between two coordinates"""
+        # Try to get the regions for both coordinates
+        region1 = self.get_region_from_coordinates(coord1)
+        region2 = self.get_region_from_coordinates(coord2)
+        
+        # If we can identify both regions, use the more challenging terrain
+        if region1 in REGION_TOPOGRAPHY and region2 in REGION_TOPOGRAPHY:
+            terrain_type1 = REGION_TOPOGRAPHY[region1]
+            terrain_type2 = REGION_TOPOGRAPHY[region2]
+            # Use the more challenging terrain between the two points
+            terrain_types = [terrain_type1, terrain_type2]
+            if "MOUNTAINS" in terrain_types:
+                return GEOGRAPHIC_FACTORS["MOUNTAINS"]
+            elif "HILLS" in terrain_types:
+                return GEOGRAPHIC_FACTORS["HILLS"]
+            elif "URBAN" in terrain_types:
+                return GEOGRAPHIC_FACTORS["URBAN"]
+            else:
+                return GEOGRAPHIC_FACTORS["FLAT"]
+        
+        # If we can't determine regions, use a default factor
+        return 1.15  # Assume slightly complex terrain as default
+    
+    def get_region_from_coordinates(self, coords):
+        """Get the German state/region from coordinates"""
+        if self.has_geopy:
+            try:
+                # Reverse geocode to get location information
+                location = self.geolocator.reverse(f"{coords[1]}, {coords[0]}", language="de", timeout=5)
+                if location and location.raw.get('address'):
+                    address = location.raw['address']
+                    # Try to get state information
+                    state = address.get('state')
+                    if state:
+                        return state
+            except Exception as e:
+                logging.error(f"Error in reverse geocoding: {e}")
+                # Fall through to approximation
+        
+        # More complete approximation of German states based on coordinates
+        lat, lon = coords[1], coords[0]
+        
+        # More precise mapping of coordinates to German states
+        if 47.5 <= lat <= 49.8 and 8.9 <= lon <= 13.8:
+            return "Bayern"
+        elif 47.5 <= lat <= 49.8 and 7.5 <= lon <= 9.8:
+            return "Baden-Württemberg"
+        elif 49.3 <= lat <= 51.5 and 7.7 <= lon <= 10.2:
+            return "Hessen"
+        elif 50.2 <= lat <= 51.6 and 9.9 <= lon <= 12.6:
+            return "Thüringen"
+        elif 50.1 <= lat <= 51.7 and 11.8 <= lon <= 15.0:
+            return "Sachsen"
+        elif 48.9 <= lat <= 50.9 and 6.1 <= lon <= 8.5:
+            return "Rheinland-Pfalz"
+        elif 49.1 <= lat <= 49.6 and 6.3 <= lon <= 7.4:
+            return "Saarland"
+        elif 50.3 <= lat <= 52.5 and 5.8 <= lon <= 9.5:
+            return "Nordrhein-Westfalen"
+        elif 51.2 <= lat <= 54.0 and 6.5 <= lon <= 11.6:
+            return "Niedersachsen"
+        elif 53.0 <= lat <= 53.6 and 8.4 <= lon <= 9.0:
+            return "Bremen"
+        elif 53.4 <= lat <= 53.7 and 9.6 <= lon <= 10.3:
+            return "Hamburg"
+        elif 53.3 <= lat <= 55.1 and 8.4 <= lon <= 11.3:
+            return "Schleswig-Holstein"
+        elif 53.0 <= lat <= 54.9 and 10.5 <= lon <= 14.5:
+            return "Mecklenburg-Vorpommern"
+        elif 51.3 <= lat <= 53.6 and 11.2 <= lon <= 14.8:
+            return "Brandenburg"
+        elif 52.3 <= lat <= 52.7 and 13.0 <= lon <= 13.8:
+            return "Berlin"
+        elif 50.8 <= lat <= 53.1 and 10.5 <= lon <= 13.2:
+            return "Sachsen-Anhalt"
+        
+        # If coordinates don't match any of the defined regions, determine general terrain
+        # North Germany is generally flat, South Germany has more hills and mountains
+        if lat >= 52.0:
+            return "FLAT_REGION"
+        elif lat >= 50.0:
+            return "HILLY_REGION"
+        else:
+            return "MOUNTAINOUS_REGION"
+    
+    def estimate_station_stops(self, distance_km, train_type):
+        """Estimate the number of station stops based on distance and train type"""
+        # Calculate approximate number of stops based on distance and train type
+        estimated_stops = distance_km / 100 * TYPICAL_STATIONS_PER_100KM[train_type]
+        # Round to nearest whole number but ensure at least 0
+        return max(0, round(estimated_stops))
+    
     def save_to_file(self, filepath):
         """Save cities, connections, and train types to a file"""
         try:
@@ -1037,6 +1227,104 @@ class TrainRouteApp:
             messagebox.showinfo("Export Success", message)
         else:
             messagebox.showerror("Export Error", message)
+            
+    def edit_connection_dialog(self, update_plot=False):
+        """Dialog to edit an existing connection's train type"""
+        if not self.route_data.connections:
+            messagebox.showinfo("Info", "No connections available to edit.")
+            return
+            
+        edit_window = tk.Toplevel(self.root if not hasattr(self, 'integrated_window') else self.integrated_window)
+        edit_window.title("Edit Connection")
+        
+        # Connection selection
+        tk.Label(edit_window, text="Select connection to edit:").grid(row=0, column=0, padx=5, pady=5)
+        connection_var = tk.StringVar(edit_window)
+        connections_list = [f"{conn[0]} → {conn[1]}" for conn in self.route_data.connections]
+        connection_var.set(connections_list[0])
+        connection_menu = tk.OptionMenu(edit_window, connection_var, *connections_list)
+        connection_menu.grid(row=0, column=1, columnspan=2, padx=5, pady=5, sticky='ew')
+        
+        # Train type selection
+        tk.Label(edit_window, text="Select train type:").grid(row=1, column=0, padx=5, pady=5)
+        train_type_var = tk.StringVar(edit_window)
+        
+        # Get the current train type for the selected connection
+        def update_train_type(*args):
+            selected_conn = connection_var.get().split(" → ")
+            city1, city2 = selected_conn[0], selected_conn[1]
+            current_type = self.route_data.get_train_type(city1, city2)
+            train_type_var.set(current_type)
+            
+            # Update description based on train type
+            speed_percent = int(TRAIN_TYPES[current_type]['speed_factor'] * 100)
+            train_desc_var.set(f"Speed: {speed_percent}% of base")
+        
+        # Initial train type setup
+        first_conn = connections_list[0].split(" → ")
+        first_type = self.route_data.get_train_type(first_conn[0], first_conn[1])
+        train_type_var.set(first_type)
+        
+        train_menu = tk.OptionMenu(edit_window, train_type_var, *TRAIN_TYPES.keys())
+        train_menu.grid(row=1, column=1, padx=5, pady=5)
+        
+        # Set up description label
+        train_desc_var = tk.StringVar(edit_window)
+        speed_percent = int(TRAIN_TYPES[first_type]['speed_factor'] * 100)
+        train_desc_var.set(f"Speed: {speed_percent}% of base")
+        tk.Label(edit_window, textvariable=train_desc_var).grid(row=1, column=2, padx=5, sticky='w')
+        
+        # Connect the connection selector to update train type
+        connection_var.trace('w', update_train_type)
+        
+        # Update description when train type changes
+        def update_train_desc(*args):
+            train_type = train_type_var.get()
+            speed_percent = int(TRAIN_TYPES[train_type]['speed_factor'] * 100)
+            train_desc_var.set(f"Speed: {speed_percent}% of base")
+        
+        train_type_var.trace('w', update_train_desc)
+        
+        # Travel time preview 
+        travel_time_var = tk.StringVar(edit_window)
+        travel_time = self.route_data.get_travel_time(first_conn[0], first_conn[1])
+        travel_time_var.set(f"Current travel time: {travel_time}")
+        
+        tk.Label(edit_window, text="Travel time:").grid(row=2, column=0, padx=5, pady=5)
+        tk.Label(edit_window, textvariable=travel_time_var).grid(row=2, column=1, columnspan=2, padx=5, pady=5, sticky='w')
+        
+        # Update travel time preview when connection or train type changes
+        def update_travel_time(*args):
+            selected_conn = connection_var.get().split(" → ")
+            city1, city2 = selected_conn[0], selected_conn[1]
+            travel_time = self.route_data.get_travel_time(city1, city2)
+            travel_time_var.set(f"Current travel time: {travel_time}")
+        
+        connection_var.trace('w', update_travel_time)
+        
+        def save_changes():
+            selected_conn = connection_var.get().split(" → ")
+            city1, city2 = selected_conn[0], selected_conn[1]
+            train_type = train_type_var.get()
+            
+            # Find the actual connection tuple
+            connection_tuple = None
+            for conn in self.route_data.connections:
+                if (conn[0] == city1 and conn[1] == city2) or (conn[0] == city2 and conn[1] == city1):
+                    connection_tuple = conn
+                    break
+            
+            if connection_tuple:
+                # Update the train type in the route data
+                self.route_data.connection_train_types[connection_tuple] = train_type
+                messagebox.showinfo("Success", f"Connection {city1} → {city2} updated to {train_type}!")
+                edit_window.destroy()
+                if update_plot:
+                    self.map_plotter.update_plot()
+        
+        tk.Button(edit_window, text="Save Changes", command=save_changes).grid(
+            row=3, column=0, columnspan=3, pady=10)
+            
     def plot_map(self):
         """Plot the map in a matplotlib window (legacy function)"""
         fig, ax = plt.subplots(figsize=(20, 20))
@@ -1070,6 +1358,20 @@ class TrainRouteApp:
             else:
                 logging.debug(f"Valid connection: {city1} -> {city2}")
         logging.debug("Debug checks completed.")
+
+    @staticmethod
+    def haversine_distance(coord1, coord2):
+        """Calculate Haversine distance between two coordinates (lon, lat)"""
+        lon1, lat1 = radians(coord1[0]), radians(coord1[1])
+        lon2, lat2 = radians(coord2[0]), radians(coord2[1])
+        dlon = lon2 - lon1
+        dlat = lat2 - lat1
+        a = sin(dlat / 2)**2 + cos(lat1) * cos(lat2) * sin(dlon / 2)**2
+        c = 2 * atan2(sqrt(a), sqrt(1 - a))
+        logging.debug(f"Calculating Haversine distance between {coord1} and {coord2}")
+        logging.debug(f"Converted coordinates to radians: ({lon1}, {lat1}), ({lon2}, {lat2})")
+        logging.debug(f"Calculated distance (km): {EARTH_RADIUS_KM * c}")
+        return EARTH_RADIUS_KM * c
 
 if __name__ == "__main__":
     app = TrainRouteApp(tk.Tk())
