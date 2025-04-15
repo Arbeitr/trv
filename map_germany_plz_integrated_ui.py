@@ -452,21 +452,22 @@ class RouteData:
         return max(0, round(estimated_stops))
     
     def save_to_file(self, filepath):
-        """Save cities, connections, and train types to a file"""
+        """Save cities, connections, train types, and zoomed states to a file"""
         try:
             with open(filepath, 'w') as file:
                 json.dump({
                     "cities": self.cities, 
                     "connections": self.connections, 
                     "train_types": {str(k): v for k, v in self.connection_train_types.items()},
-                    "travel_times": {str(k): v for k, v in self.travel_times_data.items()}
+                    "travel_times": {str(k): v for k, v in self.travel_times_data.items()},
+                    "zoomed_states": self.zoomed_states if hasattr(self, 'zoomed_states') else None  # Save zoomed states
                 }, file)
             return True, f"Routes saved successfully to {filepath}."
         except Exception as e:
             return False, f"Failed to save routes: {str(e)}"
-    
+
     def load_from_file(self, filepath):
-        """Load cities, connections, and train types from a file"""
+        """Load cities, connections, train types, and zoomed states from a file"""
         try:
             with open(filepath, 'r') as file:
                 data = json.load(file)
@@ -492,6 +493,9 @@ class RouteData:
                         self.travel_times_data[(tuple_str[0], tuple_str[1])] = v
                 
                 self.city_ids = {city: f"city_{i}" for i, city in enumerate(self.cities.keys())}
+                
+                # Load zoomed states (backward compatibility)
+                self.zoomed_states = data.get("zoomed_states", None)
             return True, f"Routes loaded successfully from {filepath}."
         except Exception as e:
             return False, f"Failed to load routes: {str(e)}"
@@ -611,6 +615,9 @@ class MapPlotter:
         
         # Set zoom bounds
         self.current_zoom_bounds = self.filtered_states.total_bounds
+        
+        # Save the zoomed states to the RouteData object
+        self.route_data.zoomed_states = state_list
         
         # Update plot
         self.update_plot()
@@ -1182,7 +1189,11 @@ class TrainRouteApp:
         success, message = self.route_data.load_from_file(load_path)
         if success:
             messagebox.showinfo("Success", message)
-            self.map_plotter.update_plot()
+            # Automatically zoom into the declared states if zoomed_states is set
+            if self.route_data.zoomed_states:
+                self.map_plotter.zoom_into_states(self.route_data.zoomed_states)
+            else:
+                self.map_plotter.update_plot()
         else:
             messagebox.showerror("Error", message)
     def export_as_pdf(self):
@@ -1460,7 +1471,7 @@ class TrainRouteApp:
         dlon = lon2 - lon1
         dlat = lat2 - lat1
         a = sin(dlat / 2)**2 + cos(lat1) * cos(lat2) * sin(dlon / 2)**2
-        c = 2 * atan2(sqrt(a), sqrt(a))
+        c = 2 * atan2(sqrt(a), sqrt(1-a))
         logging.debug(f"Calculating Haversine distance between {coord1} and {coord2}")
         logging.debug(f"Converted coordinates to radians: ({lon1}, {lat1}), ({lon2}, {lat2})")
         logging.debug(f"Final computed Haversine distance (in kilometers): {EARTH_RADIUS_KM * c}")
