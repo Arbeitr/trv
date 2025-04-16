@@ -160,7 +160,13 @@ class RouteData:
         try:
             import geopy.geocoders
             from geopy.extra.rate_limiter import RateLimiter
-            self.geolocator = geopy.geocoders.Nominatim(user_agent="train_route_visualizer")
+            
+            # Use a simpler initialization without custom adapter factory
+            self.geolocator = geopy.geocoders.Nominatim(
+                user_agent="train_route_visualizer",
+                scheme='https',
+                timeout=10
+            )
             self.geocode = RateLimiter(self.geolocator.geocode, min_delay_seconds=1)
             self.has_geopy = True
             logging.info("Geopy available - using enhanced geographic data for calculations")
@@ -184,30 +190,26 @@ class RouteData:
             return True, f"City '{city_name}' added successfully!"
         except Exception as e:
             return False, f"Error retrieving location data: {str(e)}"
-    
+
     def add_connection(self, city1, city2, train_type=DEFAULT_TRAIN_TYPE):
         """Add a connection between two cities with specified train type"""
         if city1 == city2:
             return False, "A city cannot be connected to itself."
-        
-        if (city1, city2) in self.connections or (city2, city1) in self.connections:
+        if tuple(sorted([city1, city2])) in [tuple(sorted(conn)) for conn in self.connections]:
             return False, "This connection already exists."
-        
         self.connections.append((city1, city2))
         self.connection_train_types[(city1, city2)] = train_type
         return True, f"Connection added between {city1} and {city2} ({train_type})!"
-    
+
     def remove_city(self, city_name):
         """Remove a city and handle its connections"""
         if city_name not in self.cities:
             return False, f"City {city_name} does not exist."
-        
         del self.cities[city_name]
         
         # Find directly connected cities and create new connections between them
         directly_connected = [conn for conn in self.connections if city_name in conn]
         new_connections = []
-        
         for conn1 in directly_connected:
             for conn2 in directly_connected:
                 if conn1 != conn2:
@@ -219,18 +221,15 @@ class RouteData:
         # Remove connections with the deleted city and add new ones
         self.connections = [conn for conn in self.connections if city_name not in conn]
         self.connections.extend(new_connections)
-        
         # Also remove train type info for removed connections
         for conn in list(self.connection_train_types.keys()):
             if city_name in conn:
                 del self.connection_train_types[conn]
-        
         # Invalidate cache for affected connections
         for conn in directly_connected:
             self.travel_time_cache.pop(tuple(sorted(conn)), None)
-        
         return True, f"City {city_name} and its connections removed successfully!"
-    
+
     def remove_connection(self, city1, city2):
         """Remove a connection between cities"""
         if (city1, city2) in self.connections:
@@ -246,7 +245,7 @@ class RouteData:
             self.travel_time_cache.pop(tuple(sorted([city2, city1])), None)  # Invalidate cache
             return True
         return False
-    
+
     def get_train_type(self, city1, city2):
         """Get the train type for a connection"""
         if (city1, city2) in self.connection_train_types:
@@ -254,7 +253,7 @@ class RouteData:
         elif (city2, city1) in self.connection_train_types:
             return self.connection_train_types[(city2, city1)]
         return DEFAULT_TRAIN_TYPE
-    
+
     def update_travel_time(self, city1, city2, minutes):
         """Update or set a custom travel time between two cities in minutes"""
         if (city1, city2) in self.connections:
@@ -266,20 +265,18 @@ class RouteData:
             self.travel_time_cache.pop(tuple(sorted([city2, city1])), None)  # Invalidate cache
             return True
         return False
-    
+
     def has_custom_travel_time(self, city1, city2):
         """Check if a custom travel time is set for this connection"""
         return (city1, city2) in self.travel_times_data or (city2, city1) in self.travel_times_data
-    
+
     def get_travel_time(self, city1, city2):
         """Get travel time between two cities considering train type"""
         logging.debug(f"Calculating travel time for {city1} -> {city2}")
-        
         # Check cache first
         cache_key = tuple(sorted([city1, city2]))
         if cache_key in self.travel_time_cache:
             return self.travel_time_cache[cache_key]
-        
         # Use custom travel time directly if available (no train type adjustment)
         if (city1, city2) in self.travel_times_data:
             travel_time = self.travel_times_data[(city1, city2)]
@@ -291,7 +288,6 @@ class RouteData:
                                                     self.get_train_type(city1, city2))
         else:
             return "N/A"
-        
         # Format travel time - ensure travel_time is an integer
         if isinstance(travel_time, (int, float)):
             hours = int(travel_time) // 60
@@ -300,11 +296,10 @@ class RouteData:
         else:
             # If it's already a string, return it directly
             formatted_time = travel_time
-        
         # Cache the result
         self.travel_time_cache[cache_key] = formatted_time
         return formatted_time
-    
+
     def estimate_travel_time(self, coord1, coord2, train_type=DEFAULT_TRAIN_TYPE):
         """Estimate travel time based on multiple realistic factors"""
         # Get base straight-line distance using the appropriate method
@@ -323,29 +318,22 @@ class RouteData:
         else:
             # Fall back to haversine if geopy is not available
             base_distance_km = self.haversine_distance(coord1, coord2)
-        
         # Apply route complexity factor based on train type (different types use different route networks)
         route_curvature = ROUTE_CURVATURE_FACTORS.get(train_type, ROUTE_COMPLEXITY_FACTOR)
         adjusted_distance = base_distance_km * route_curvature
-        
         # 2. Account for geographic features
         terrain_factor = self.get_terrain_factor(coord1, coord2)
-        
         # 3. Apply speed factor based on train type
         speed_factor = TRAIN_TYPES[train_type]["speed_factor"]
         adjusted_speed = AVERAGE_TRAIN_SPEED_KMH * speed_factor / terrain_factor
-        
         # 4. Calculate base travel time
         travel_time_hours = adjusted_distance / adjusted_speed
         travel_time_minutes = travel_time_hours * 60
-        
         # 5. Add time for station stops
         station_stops = self.estimate_station_stops(base_distance_km, train_type)
         stop_time_minutes = station_stops * STATION_STOP_MINUTES[train_type]
-        
         # Total adjusted travel time
         total_minutes = int(travel_time_minutes + stop_time_minutes)
-        
         # Log detailed calculation for debugging
         logging.debug(f"Enhanced travel time calculation for {coord1} -> {coord2}:")
         logging.debug(f"  Base distance (km): {base_distance_km:.2f}")
@@ -358,18 +346,16 @@ class RouteData:
         logging.debug(f"  Estimated station stops: {station_stops}")
         logging.debug(f"  Stop time (min): {stop_time_minutes}")
         logging.debug(f"  Total travel time (min): {total_minutes}")
-        
         # Format travel time
         hours = total_minutes // 60
         minutes = total_minutes % 60
         return f"{hours}h {minutes}m" if hours > 0 else f"{minutes} min"
-    
+
     def get_terrain_factor(self, coord1, coord2):
         """Determine the terrain factor between two coordinates"""
         # Try to get the regions for both coordinates
         region1 = self.get_region_from_coordinates(coord1)
         region2 = self.get_region_from_coordinates(coord2)
-        
         # If we can identify both regions, use the more challenging terrain
         if region1 in REGION_TOPOGRAPHY and region2 in REGION_TOPOGRAPHY:
             terrain_type1 = REGION_TOPOGRAPHY[region1]
@@ -384,16 +370,14 @@ class RouteData:
                 return GEOGRAPHIC_FACTORS["URBAN"]
             else:
                 return GEOGRAPHIC_FACTORS["FLAT"]
-        
         # If we can't determine regions, use a default factor
         return 1.15  # Assume slightly complex terrain as default
-    
+
     def get_region_from_coordinates(self, coords):
         """Get the German state/region from coordinates"""
         # Check cache first if available
         if hasattr(self, '_region_cache') and coords in self._region_cache:
             return self._region_cache[coords]
-            
         if self.has_geopy:
             try:
                 # Reverse geocode to get location information
@@ -411,10 +395,8 @@ class RouteData:
             except Exception as e:
                 logging.error(f"Error in reverse geocoding: {e}")
                 # Fall through to approximation
-        
         # More complete approximation of German states based on coordinates
         lat, lon = coords[1], coords[0]
-        
         # More precise mapping of coordinates to German states
         if 47.5 <= lat <= 49.8 and 8.9 <= lon <= 13.8:
             return "Bayern"
@@ -448,7 +430,6 @@ class RouteData:
             return "Berlin"
         elif 50.8 <= lat <= 53.1 and 10.5 <= lon <= 13.2:
             return "Sachsen-Anhalt"
-        
         # If coordinates don't match any of the defined regions, determine general terrain
         # North Germany is generally flat, South Germany has more hills and mountains
         region = None
@@ -458,20 +439,19 @@ class RouteData:
             region = "HILLY_REGION"
         else:
             region = "MOUNTAINOUS_REGION"
-            
         # Cache the result
         if not hasattr(self, '_region_cache'):
             self._region_cache = {}
         self._region_cache[coords] = region
         return region
-    
+
     def estimate_station_stops(self, distance_km, train_type):
         """Estimate the number of station stops based on distance and train type"""
         # Calculate approximate number of stops based on distance and train type
         estimated_stops = distance_km / 100 * TYPICAL_STATIONS_PER_100KM[train_type]
         # Round to nearest whole number but ensure at least 0
         return max(0, round(estimated_stops))
-    
+
     def save_to_file(self, filepath):
         """Save cities, connections, train types, and zoomed states to a file"""
         try:
@@ -494,7 +474,7 @@ class RouteData:
             return True, f"Routes saved successfully to {filepath}."
         except Exception as e:
             return False, f"Failed to save routes: {str(e)}"
-    
+
     def load_from_file(self, filepath):
         """Load cities, connections, train types, and zoomed states from a file"""
         try:
@@ -503,10 +483,8 @@ class RouteData:
                     data = json.load(file)
                 except json.JSONDecodeError as e:
                     return False, f"Failed to load routes: Malformed JSON - {str(e)}"
-                
                 # Load cities (default to empty dict if missing)
                 self.cities = data.get("cities", {})
-                
                 # Load connections (default to empty list if missing)
                 connections_data = data.get("connections", [])
                 self.connections = []
@@ -516,7 +494,6 @@ class RouteData:
                         self.connections.append(tuple(conn))
                     else:
                         self.connections.append(tuple(conn))
-                
                 # Handle train types - convert string tuple keys back to actual tuples
                 train_types_data = data.get("train_types", {})
                 self.connection_train_types = {}
@@ -525,7 +502,6 @@ class RouteData:
                     tuple_str = k.strip("()").replace("'", "").split(", ")
                     if len(tuple_str) == 2:
                         self.connection_train_types[(tuple_str[0], tuple_str[1])] = v
-                
                 # Handle travel times data - convert string tuple keys back to actual tuples
                 travel_times_data = data.get("travel_times", {})
                 self.travel_times_data = {}
@@ -533,17 +509,14 @@ class RouteData:
                     tuple_str = k.strip("()").replace("'", "").split(", ")
                     if len(tuple_str) == 2:
                         self.travel_times_data[(tuple_str[0], tuple_str[1])] = v
-                
                 # Generate city IDs if missing
                 self.city_ids = {city: f"city_{i}" for i, city in enumerate(self.cities.keys())}
-                
                 # Load zoomed states (default to None if missing)
                 self.zoomed_states = data.get("zoomed_states", None)
                 
                 # Load route chain names
                 self.route_chain_names = data.get("route_chain_names", {})
                 logging.info(f"Loaded route chain names: {self.route_chain_names}")
-                
                 # Load daybreaks (support both old and new formats)
                 self.daybreak_connections = set()
                 daybreaks_data = data.get("daybreaks", {})
@@ -568,17 +541,14 @@ class RouteData:
                         if isinstance(db, (list, tuple)) and len(db) == 2:
                             self.daybreak_connections.add(tuple(db))
                 logging.info(f"Loaded daybreak_connections set: {self.daybreak_connections}")
-                
                 # DO NOT automatically add missing default connections
                 # This was causing the issue with Frankfurt-Mannheim and Schwerin-Stralsund
                 # being added back even though they were removed in the file
-                
                 # Check if any connections are missing train types and add defaults for those
                 for conn in self.connections:
                     if conn not in self.connection_train_types and conn[::-1] not in self.connection_train_types:
                         default_type = TRAIN_ROUTES_TYPE.get(conn, DEFAULT_TRAIN_TYPE)
                         self.connection_train_types[conn] = default_type
-                
                 # Log the resulting connection structure for debugging
                 logging.info(f"Final loaded connections: {self.connections}")
                 chains = self.get_route_chains()
@@ -590,14 +560,14 @@ class RouteData:
                 return True, f"Routes loaded successfully from {filepath}."
         except Exception as e:
             return False, f"Failed to load routes: {str(e)}"
-    
+
     def update_city_coordinates(self, city_name, lon, lat):
         """Update coordinates for an existing city"""
         if city_name in self.cities:
             self.cities[city_name] = (lon, lat)
             return True
         return False
-    
+
     def remove_default_cities(self):
         """Remove all default cities and their connections"""
         default_city_names = list(DEFAULT_CITIES.keys())
@@ -608,12 +578,11 @@ class RouteData:
         # Remove connections involving default cities
         self.connections = [conn for conn in self.connections 
                            if conn[0] not in default_city_names and conn[1] not in default_city_names]
-        
         # Remove train types for connections involving default cities
         for conn in list(self.connection_train_types.keys()):
             if conn[0] in default_city_names or conn[1] in default_city_names:
                 del self.connection_train_types[conn]
-    
+
     def break_chain_at_connection(self, city1, city2):
         """
         Break the route chain at the given connection (city1, city2).
@@ -626,15 +595,15 @@ class RouteData:
         # No further action needed: the removal of the connection breaks the chain.
         # The plotting code already visualizes separate chains.
         return True, f"Route chain broken at {city1} ↔ {city2}."
-    
+
     def mark_daybreak(self, city1, city2):
         """Mark the connection from city1 to city2 as a daybreak (break here)."""
         self.daybreak_connections.add((city1, city2))
-    
+
     def unmark_daybreak(self, city1, city2):
         """Remove the daybreak marker from the connection."""
         self.daybreak_connections.discard((city1, city2))
-    
+
     def is_daybreak(self, city1, city2):
         """Check if the connection is marked as daybreak."""
         # Check both directions
@@ -692,12 +661,12 @@ class RouteData:
         for i, chain in enumerate(chains):
             start = chain[0][0] if chain else "N/A"
             end = chain[-1][1] if chain else "N/A"
-            has_custom_name = str(i) in self.route_chain_names
-            custom_name = self.route_chain_names.get(str(i), "")
+            has_custom_name = str(i) in self.route_data.route_chain_names
+            custom_name = self.route_data.route_chain_names.get(str(i), "")
             logging.info(f"Chain {i}: {start} to {end}, {len(chain)} segments, " +
                          f"Has custom name: {has_custom_name}, Name: '{custom_name}'")
         return chains
-    
+
     def get_raw_travel_time(self, city1, city2):
         """Get the raw travel time in minutes without formatting"""
         # Check if the travel time exists in the travel_times_data dictionary
@@ -720,18 +689,19 @@ class MapPlotter:
         self.current_zoom_bounds = None
         self.state_ids = {}
         self.show_travel_time_labels = True  # Add a flag to control travel time label visibility
-    
+
     def initialize_map(self, germany_map):
         """Initialize the map with Germany data"""
         self.germany_map = germany_map
         self.state_ids = {state: f"state_{i}" for i, state in enumerate(germany_map['name'])}
         self.germany_map['state_id'] = self.germany_map['name'].map(self.state_ids)
         self.germany_map['bounding_box'] = self.germany_map.geometry.apply(lambda geom: geom.bounds)
-
+        self.ax = None
         # Ensure backward compatibility by initializing missing attributes
         if not hasattr(self, 'verify_labels_hidden'):
             self.verify_labels_hidden = lambda: None  # Add a no-op method if missing
-    
+        self.current_zoom_bounds = None
+
     def set_canvas(self, master):
         """Set up the matplotlib canvas in the Tkinter window"""
         # Ensure figure and axes are created in the main thread
@@ -782,7 +752,7 @@ class MapPlotter:
         self.ax.axis('off')
         if self.canvas:
             self.canvas.draw()
-    
+
     def zoom_into_states(self, state_list):
         """Zoom into specific German states"""
         logging.info(f"Zooming into states: {state_list}")
@@ -799,7 +769,7 @@ class MapPlotter:
         # Update plot
         self.update_plot()
         return True, "Zoomed into selected states."
-        
+
     def reset_zoom(self):
         """Reset zoom to show the entire map"""
         self.current_zoom_bounds = None
@@ -808,7 +778,7 @@ class MapPlotter:
         # Make all labels visible
         for text in self.ax.texts:
             text.set_visible(True)
-    
+
     def handle_congested_areas(self):
         """Group nearby cities into clusters to prevent label overlap"""
         cluster_radius = self.adjust_cluster_radius()
@@ -834,7 +804,6 @@ class MapPlotter:
                     'coords': [(x, y)],
                     'center': (x, y)
                 })
-
         # Draw cluster labels
         clustered_cities = set()
         for cluster in clusters:
@@ -853,7 +822,6 @@ class MapPlotter:
         """Calculate cluster radius based on zoom level"""
         if self.current_zoom_bounds is None:
             return 1.0  # Default radius
-            
         zoom_width = self.current_zoom_bounds[2] - self.current_zoom_bounds[0]
         zoom_height = self.current_zoom_bounds[3] - self.current_zoom_bounds[1]
         # Smaller zoom area means higher zoom level, so reduce the radius
@@ -865,14 +833,12 @@ class MapPlotter:
             # Skip cities that are part of a cluster
             if any(city in cluster['cities'] for cluster in clusters if len(cluster['cities']) > 1):
                 continue
-    
             # Check if there are other cities on the same vertical axis
             same_vertical_cities = [
                 other_city for other_city, (other_x, other_y) 
-                in self.route_data.cities.items() 
+                in self.route_data.cities.items()
                 if abs(other_x - x) < 0.01 and other_city != city
             ]
-
             if same_vertical_cities:
                 # Place label to the right
                 label_x = x + 0.2
@@ -891,7 +857,6 @@ class MapPlotter:
         """Add travel time labels at the midpoint of connections"""
         if not self.show_travel_time_labels:
             return  # Skip adding labels if the flag is False
-
         existing_labels = set()
         for city1, city2 in self.route_data.connections:
             if city1 not in self.route_data.cities or city2 not in self.route_data.cities:
@@ -901,7 +866,6 @@ class MapPlotter:
             label = f"{train_type}: {travel_time}"
             if label in existing_labels:
                 continue  # Skip duplicate labels
-
             existing_labels.add(label)
             # Calculate midpoint
             x1, y1 = self.route_data.cities[city1]
@@ -914,7 +878,6 @@ class MapPlotter:
                          bbox=dict(facecolor='white', edgecolor=TRAIN_TYPES[train_type]["color"],
                                    boxstyle='round,pad=0.2', alpha=0.9),
                          zorder=11)
-
         # --- Legend is hidden in integrated UI ---
         # The following code is commented out to hide the legend in the integrated UI.
         # If you want to show the legend, uncomment the code below.
@@ -934,14 +897,13 @@ class MapPlotter:
         # legend_ax.axis('off')
         # # Draw the legend using the shared method
         # self.draw_legend_on_axes(legend_ax)
-    
+
     def draw_legend_on_axes(self, ax, full_page=False):
         """Draw legend on the given axes (reusable for both main plot and PDF export)"""
         # Use improved route chain logic with daybreaks
         chains = self.route_data.get_route_chains()
         if not chains:
             return
-            
         # Adjust layout parameters based on whether this is a full page or not
         if full_page:
             columns = min(4, len(chains))
@@ -965,7 +927,6 @@ class MapPlotter:
             x_pos = x_start + (column * x_spacing)
             y_start = y_start_top - (row * (1.0 / chain_height_factor) * len(chain))
             chain_y = y_start
-        
             if chain_y < 0.1:
                 logging.warning(f"Chain {chain_idx} position {chain_y} is below 0.1, skipping")
                 continue
@@ -977,17 +938,16 @@ class MapPlotter:
                     transform=ax.transAxes, ha='left')
             chain_y -= y_decrement
             total_time_minutes = 0
-            
             # Draw each segment in the chain
             for i, (city1, city2) in enumerate(chain):
                 # Draw connecting line with train type color
                 if i > 0:
                     train_type = self.route_data.get_train_type(city1, city2)
                     line_color = TRAIN_TYPES[train_type]["color"]
-                    ax.plot([x_pos, x_pos], 
+                    ax.plot([x_pos, x_pos],
                             [chain_y + y_decrement, chain_y],
                             color=line_color, linewidth=3 if full_page else 2, 
-                            linestyle='-', alpha=0.9,
+                            linestyle='-', alpha=0.9, 
                             transform=ax.transAxes, clip_on=False)
                     # Add train type label
                     ax.text(x_pos - 0.02, chain_y + y_decrement/2, train_type, 
@@ -998,13 +958,12 @@ class MapPlotter:
                 ax.plot(x_pos, chain_y, marker='o', markersize=10 if full_page else 8,
                         markeredgecolor='black', markerfacecolor='white', 
                         transform=ax.transAxes, clip_on=False)
-                # Add city labels
+                # Add city label
                 ax.text(x_pos + 0.02, chain_y, city1, 
                         fontsize=10 if full_page else 7, fontfamily='sans-serif', 
                         ha='left', va='center', transform=ax.transAxes, clip_on=False, 
                         bbox=dict(facecolor='white', edgecolor='none', 
                                  boxstyle='round,pad=0.2' if full_page else 'round,pad=0.1'))
-
                 # Calculate travel time
                 travel_time = self.route_data.get_travel_time(city1, city2)
                 if travel_time != "N/A":
@@ -1022,13 +981,11 @@ class MapPlotter:
                     ax.text(x_pos + 0.02, chain_y - y_decrement/2, time_text,
                             fontsize=8 if full_page else 6, color='#555555',
                             ha='left', va='center', transform=ax.transAxes)
-
                 # Add daybreak marker if present
                 if self.route_data.is_daybreak(city1, city2):
                     ax.text(x_pos + 0.25, chain_y, "", fontsize=8 if full_page else 6, color='red',
                             ha='left', va='center', transform=ax.transAxes, fontweight='bold')
                 chain_y -= y_decrement
-
             # Add last city in chain
             if chain:
                 last_city = chain[-1][1]
@@ -1046,10 +1003,10 @@ class MapPlotter:
                     last_city = chain[-1][1]
                     train_type = self.route_data.get_train_type(second_last_city, last_city)
                     line_color = TRAIN_TYPES[train_type]["color"]
-                    ax.plot([x_pos, x_pos], 
+                    ax.plot([x_pos, x_pos],
                             [chain_y + y_decrement, chain_y],
                             color=line_color, linewidth=3 if full_page else 2, 
-                            linestyle='-', alpha=0.9,
+                            linestyle='-', alpha=0.9, 
                             transform=ax.transAxes, clip_on=False)
                     ax.text(x_pos - 0.02, chain_y + y_decrement/2, train_type, 
                             fontsize=8 if full_page else 6, fontweight='bold', 
@@ -1075,7 +1032,7 @@ class MapPlotter:
             ax.text(x_pos, chain_y - 0.05, total_time_str, 
                     fontsize=9 if full_page else 7, fontweight='bold', 
                     transform=ax.transAxes, ha='left', va='top')
-    
+
     def export_as_pdf(self, filepath):
         """Export the map as a DIN A4 PDF"""
         try:
@@ -1086,7 +1043,6 @@ class MapPlotter:
             with PdfPages(filepath) as pdf:
                 # First page - Map only (full page)
                 self.fig.set_size_inches(8.27, 11.69)  # DIN A4 dimensions
-                
                 # Save current axes position
                 original_position = self.ax.get_position()
                 
@@ -1105,7 +1061,6 @@ class MapPlotter:
                 # Save the legend page
                 pdf.savefig(legend_fig, bbox_inches='tight')
                 plt.close(legend_fig)  # Close the legend figure
-                
                 # Restore original map settings
                 self.ax.set_position(original_position)
                 self.fig.set_size_inches(original_figsize)
@@ -1123,7 +1078,7 @@ class TrainRouteApp:
         # Show loading screen while loading map data
         self.show_loading_screen("Loading map data...")
         threading.Thread(target=self.load_map_data).start()  # Run map loading in a separate thread
-    
+
     def show_loading_screen(self, message):
         """Display a loading screen with a progress bar"""
         self.loading_window = tk.Toplevel(self.root)
@@ -1134,12 +1089,12 @@ class TrainRouteApp:
         self.progress = Progressbar(self.loading_window, mode="indeterminate")
         self.progress.pack(pady=10, padx=20, fill=tk.X)
         self.progress.start(10)  # Start progress animation
-    
+
     def hide_loading_screen(self):
         """Hide the loading screen"""
         if hasattr(self, 'loading_window') and self.loading_window:
             self.loading_window.destroy()
-    
+
     def load_map_data(self):
         """Load map data in a background thread"""
         try:
@@ -1157,12 +1112,12 @@ class TrainRouteApp:
             self.root.after(0, self.hide_loading_screen)
             self.root.after(0, self.setup_old_ui)
             self.root.after(0, self.open_integrated_ui)
-    
+
     def initialize_map_plotter(self):
         """Initialize the map plotter in the main thread"""
         self.map_plotter = MapPlotter(self.route_data)
         self.map_plotter.initialize_map(self.germany)
-    
+
     def setup_old_ui(self):
         """Set up the original UI (will be minimized)"""
         # These buttons are just for compatibility and won't be visible
@@ -1178,7 +1133,7 @@ class TrainRouteApp:
         menu_bar = tk.Menu(self.root)
         self.root.config(menu=menu_bar)
         menu_bar.add_command(label="Run Debug Checks", command=self.debug_functionality)
-    
+
     def open_integrated_ui(self):
         """Open the integrated UI window and minimize the old one"""
         self.root.withdraw()  # Hide the old UI
@@ -1194,7 +1149,7 @@ class TrainRouteApp:
         self.map_plotter.set_canvas(plot_frame)
         # Close handler
         self.integrated_window.protocol("WM_DELETE_WINDOW", self.on_close)
-    
+
     def create_integrated_menu(self):
         """Create menu for the integrated UI"""
         menu_bar = tk.Menu(self.integrated_window)
@@ -1256,7 +1211,7 @@ class TrainRouteApp:
         except ImportError:
             messagebox.showerror("Error", "Route branching module not found. Please ensure route_branching.py is in the same directory.")
         except Exception as e:
-            messagebox.showerror("Error", f"Failed to open branch manager: {str(e)}")
+            messagebox.showerror("Error", f"Failed to open branch manager: {str(e)}\n\nError type: {type(e).__name__}")
 
     def toggle_travel_time_labels(self):
         """Toggle the visibility of travel time labels"""
@@ -1267,7 +1222,7 @@ class TrainRouteApp:
         """Handle window closing"""
         self.integrated_window.destroy()
         self.root.destroy()
-    
+
     def add_city_dialog(self, update_plot=False):
         """Dialog to add a new city by postal code"""
         postal_code = simpledialog.askstring("Add City", "Enter Postleitzahl:")
@@ -1280,7 +1235,7 @@ class TrainRouteApp:
                 self.map_plotter.update_plot()
         else:
             messagebox.showerror("Error", message)
-    
+
     def add_connection_dialog(self, update_plot=False):
         """Dialog to add a connection between cities with train type selection"""
         if len(self.route_data.cities) < 2:
@@ -1356,7 +1311,7 @@ class TrainRouteApp:
             except ValueError:
                 messagebox.showerror("Error", "Invalid coordinates. Please enter numeric values.")
         tk.Button(edit_window, text="Edit City", command=update_city).pack(pady=5)
-    
+
     def remove_city_dialog(self, update_plot=False):
         """Dialog to remove a city"""
         city_list = list(self.route_data.cities.keys())
@@ -1413,7 +1368,7 @@ class TrainRouteApp:
             else:
                 messagebox.showerror("Error", f"Route {city1} -> {city2} could not be removed.")
         tk.Button(remove_window, text="Remove Route", command=delete_route).pack(pady=5)
-    
+
     def zoom_into_states_dialog(self):
         """Dialog to zoom into specific German states"""
         states = simpledialog.askstring("Zoom", "Enter German states to zoom into (comma-separated):")
@@ -1454,7 +1409,7 @@ class TrainRouteApp:
                 self.map_plotter.update_plot()
         else:
             messagebox.showerror("Error", message)
-    
+
     def export_as_pdf(self):
         """Export currentmap as PDF"""
         # Ask user for save location instead of using fixed path
@@ -1463,7 +1418,6 @@ class TrainRouteApp:
             filetypes=[("PDF files", "*.pdf"), ("All files", "*.*")],
             title="Save Train Route Map as PDF"
         )
-        
         if not export_path:  # User cancelled the dialog
             return
         
@@ -1472,7 +1426,7 @@ class TrainRouteApp:
             messagebox.showinfo("Export Success", message)
         else:
             messagebox.showerror("Export Error", message)
-    
+
     def edit_connection_dialog(self, update_plot=False):
         """Dialog to edit an existing connection's train type and travel time"""
         if not self.route_data.connections:
@@ -1489,23 +1443,19 @@ class TrainRouteApp:
         connection_var.set(connections_list[0])
         connection_menu = tk.OptionMenu(edit_window, connection_var, *connections_list)
         connection_menu.grid(row=0, column=1, padx=10, pady=10, sticky="ew")
-
         # Train type selection
         tk.Label(edit_window, text="Train type:", font=("Arial", 10)).grid(row=1, column=0, padx=10, pady=10, sticky="w")
         train_type_var = tk.StringVar(edit_window)
         train_menu = tk.OptionMenu(edit_window, train_type_var, *TRAIN_TYPES.keys())
         train_menu.grid(row=1, column=1, padx=10, pady=10, sticky="ew")
-
         # Travel time input
         tk.Label(edit_window, text="Travel time (minutes):", font=("Arial", 10)).grid(row=2, column=0, padx=10, pady=10, sticky="w")
         travel_time_entry = tk.Entry(edit_window, width=10)
         travel_time_entry.grid(row=2, column=1, padx=10, pady=10, sticky="w")
-
         # Travel time status
         travel_time_status_var = tk.StringVar(edit_window)
         travel_time_status_label = tk.Label(edit_window, textvariable=travel_time_status_var, font=("Arial", 9), fg="blue")
         travel_time_status_label.grid(row=3, column=0, columnspan=2, padx=10, pady=5, sticky="w")
-
         # Daybreak marker
         daybreak_var = tk.BooleanVar(edit_window)
 
@@ -1536,13 +1486,11 @@ class TrainRouteApp:
         def reset_to_calculated():
             selected_conn = connection_var.get().split(" → ")
             city1, city2 = selected_conn[0], selected_conn[1]
-
             # Remove custom travel time
             if (city1, city2) in self.route_data.travel_times_data:
                 del self.route_data.travel_times_data[(city1, city2)]
             elif (city2, city1) in self.route_data.travel_times_data:
                 del self.route_data.travel_times_data[(city2, city1)]
-
             # Update fields
             travel_time_entry.delete(0, tk.END)
             travel_time_status_var.set("Calculated travel time is being used.")
@@ -1606,7 +1554,7 @@ class TrainRouteApp:
         # Initialize fields
         update_fields()
         connection_var.trace('w', update_fields)
-    
+
     def name_route_chains_dialog(self):
         """Dialog to name route chains"""
         # Get the current route chains
@@ -1631,7 +1579,7 @@ class TrainRouteApp:
         canvas.configure(yscrollcommand=scrollbar.set)
         canvas.pack(side="left", fill="both", expand=True)
         scrollbar.pack(side="right", fill="y")
-        
+
         # Create entries for each route chain
         entries = []
         for i, chain in enumerate(chains):
@@ -1665,7 +1613,6 @@ class TrainRouteApp:
                 entry.insert(0, self.route_data.route_chain_names[str(i)])
             
             entries.append((i, entry))
-            
             # Add separator
             tk.Frame(scrollable_frame, height=1, bg="gray").pack(fill=tk.X, pady=5)
         
@@ -1686,7 +1633,6 @@ class TrainRouteApp:
         # Add buttons
         button_frame = tk.Frame(name_window)
         button_frame.pack(fill=tk.X, pady=10)
-        
         tk.Button(button_frame, text="Cancel", command=name_window.destroy).pack(side=tk.LEFT, padx=10)
         tk.Button(button_frame, text="Save", command=save_names).pack(side=tk.RIGHT, padx=10)
 
