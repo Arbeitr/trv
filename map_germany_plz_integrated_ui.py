@@ -455,11 +455,11 @@ class RouteData:
     def save_to_file(self, filepath):
         """Save cities, connections, train types, and zoomed states to a file"""
         try:
+            # Log route_splits before saving
+            logging.info(f"Saving route_splits: {self.route_splits}")
             with open(filepath, 'w') as file:
-                # Save route_splits as a dict with stringified connection keys and boolean values
                 route_splits_dict = {}
                 for conn in self.connections:
-                    # Mark True if this connection is an end-of-day split
                     route_splits_dict[str(conn)] = (conn in self.route_splits)
                 json.dump({
                     "cities": self.cities, 
@@ -469,6 +469,7 @@ class RouteData:
                     "zoomed_states": self.zoomed_states if hasattr(self, 'zoomed_states') else None,
                     "route_splits": route_splits_dict
                 }, file)
+            logging.info(f"Saved route_splits_dict: {route_splits_dict}")
             return True, f"Routes saved successfully to {filepath}."
         except Exception as e:
             return False, f"Failed to save routes: {str(e)}"
@@ -486,7 +487,14 @@ class RouteData:
                 self.cities = data.get("cities", {})
                 
                 # Load connections (default to empty list if missing)
-                self.connections = data.get("connections", [])
+                connections_data = data.get("connections", [])
+                self.connections = []
+                for conn in connections_data:
+                    # Convert any list connections to tuples
+                    if isinstance(conn, list) and len(conn) == 2:
+                        self.connections.append(tuple(conn))
+                    else:
+                        self.connections.append(tuple(conn))
                 
                 # Handle train types - convert string tuple keys back to actual tuples
                 train_types_data = data.get("train_types", {})
@@ -514,27 +522,28 @@ class RouteData:
                 # Load route splits (support both old and new formats)
                 self.route_splits = set()
                 route_splits_data = data.get("route_splits", {})
+                logging.info(f"Loaded route_splits_data from file: {route_splits_data}")
                 if isinstance(route_splits_data, dict):
                     # New format: {str(conn): bool}
                     for k, v in route_splits_data.items():
                         if v:
-                            # Parse string "(city1, city2)" to tuple
                             tuple_str = k.strip("()").replace("'", "").split(", ")
                             if len(tuple_str) == 2:
-                                # Try both (city1, city2) and (city2, city1) for robustness
-                                conn_tuple = (tuple_str[0], tuple_str[1])
-                                if conn_tuple in self.connections:
-                                    self.route_splits.add(conn_tuple)
-                                else:
-                                    # Try reversed
-                                    conn_tuple_rev = (tuple_str[1], tuple_str[0])
-                                    if conn_tuple_rev in self.connections:
-                                        self.route_splits.add(conn_tuple_rev)
+                                city1, city2 = tuple_str[0], tuple_str[1]
+                                # Store split in the same order as in connections list
+                                for conn in self.connections:
+                                    # Ensure conn is a tuple
+                                    conn_tuple = tuple(conn) if isinstance(conn, list) else conn
+                                    if (conn_tuple[0] == city1 and conn_tuple[1] == city2) or (conn_tuple[0] == city2 and conn_tuple[1] == city1):
+                                        self.route_splits.add(conn_tuple)
+                                        logging.info(f"Added route split: {conn_tuple}")
+                                        break
                 elif isinstance(route_splits_data, list):
                     # Old format: list of lists/tuples
                     for split in route_splits_data:
                         if isinstance(split, (list, tuple)) and len(split) == 2:
                             self.route_splits.add(tuple(split))
+                logging.info(f"Loaded route_splits set: {self.route_splits}")
                 
                 # Ensure default connections and train types are added if missing
                 for connection in DEFAULT_CONNECTIONS:
@@ -593,7 +602,10 @@ class RouteData:
 
     def is_end_of_day(self, city1, city2):
         """Check if the connection is marked as end of day."""
-        return (city1, city2) in self.route_splits
+        # Check both directions
+        result = (city1, city2) in self.route_splits or (city2, city1) in self.route_splits
+        logging.debug(f"Checking end of day for ({city1}, {city2}): {result}, route_splits: {self.route_splits}")
+        return result
 
     def get_route_chains(self):
         """
@@ -1478,7 +1490,9 @@ class TrainRouteApp:
                 travel_time_status_var.set("Calculated travel time is being used.")
 
             # Update end of day marker
-            end_of_day_var.set(self.route_data.is_end_of_day(city1, city2))
+            is_split = self.route_data.is_end_of_day(city1, city2)
+            logging.info(f"Edit Connection Dialog: Checking split for ({city1}, {city2}): {is_split}")
+            end_of_day_var.set(is_split)
 
         # Reset to calculated travel time
         def reset_to_calculated():
