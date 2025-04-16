@@ -537,6 +537,20 @@ class RouteData:
             if conn[0] in default_city_names or conn[1] in default_city_names:
                 del self.connection_train_types[conn]
 
+    def split_chain_at_connection(self, city1, city2):
+        """
+        Split the route chain at the given connection (city1, city2).
+        This removes the connection and ensures the two resulting subgraphs are disconnected.
+        """
+        # Remove the connection
+        removed = self.remove_connection(city1, city2)
+        if not removed:
+            return False, "Connection does not exist."
+
+        # No further action needed: the removal of the connection splits the chain.
+        # The plotting code already visualizes separate chains.
+        return True, f"Route chain split at {city1} ↔ {city2}."
+
 
 class MapPlotter:
     """Class for handling map visualization"""
@@ -1353,7 +1367,7 @@ class TrainRouteApp:
 
         edit_window = tk.Toplevel(self.root if not hasattr(self, 'integrated_window') else self.integrated_window)
         edit_window.title("Edit Connection")
-        edit_window.geometry("400x300")
+        edit_window.geometry("400x340")
         edit_window.resizable(False, False)
 
         # Connection selection
@@ -1440,9 +1454,24 @@ class TrainRouteApp:
             if update_plot:
                 self.map_plotter.update_plot()
 
+        # --- New Feature: Make New Route From Here ---
+        def make_new_route_from_here():
+            selected_conn = connection_var.get().split(" → ")
+            city1, city2 = selected_conn[0], selected_conn[1]
+            result, msg = self.route_data.split_chain_at_connection(city1, city2)
+            if result:
+                messagebox.showinfo("Route Split", msg)
+                edit_window.destroy()
+                if update_plot:
+                    self.map_plotter.update_plot()
+            else:
+                messagebox.showerror("Error", msg)
+
         # Buttons
         tk.Button(edit_window, text="Reset to Calculated", command=reset_to_calculated).grid(row=4, column=0, padx=10, pady=10, sticky="w")
         tk.Button(edit_window, text="Save Changes", command=save_changes).grid(row=4, column=1, padx=10, pady=10, sticky="e")
+        # Add the "Make New Route From Here" button
+        tk.Button(edit_window, text="Make New Route From Here", command=make_new_route_from_here, fg="red").grid(row=5, column=0, columnspan=2, padx=10, pady=10, sticky="ew")
 
         # Initialize fields
         update_fields()
