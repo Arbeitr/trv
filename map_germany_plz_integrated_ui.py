@@ -287,15 +287,19 @@ class RouteData:
             travel_time = self.travel_times_data[(city2, city1)]
         elif city1 in self.cities and city2 in self.cities:
             # Calculate travel time for user-added cities, considering train type
-            travel_time = self.estimate_travel_time(self.cities[city1], self.cities[city2], 
+            return self.estimate_travel_time(self.cities[city1], self.cities[city2], 
                                                     self.get_train_type(city1, city2))
         else:
             return "N/A"
         
-        # Format travel time
-        hours = travel_time // 60
-        minutes = travel_time % 60
-        formatted_time = f"{hours}h {minutes}m" if hours > 0 else f"{minutes} min"
+        # Format travel time - ensure travel_time is an integer
+        if isinstance(travel_time, (int, float)):
+            hours = int(travel_time) // 60
+            minutes = int(travel_time) % 60
+            formatted_time = f"{hours}h {minutes}m" if hours > 0 else f"{minutes} min"
+        else:
+            # If it's already a string, return it directly
+            formatted_time = travel_time
         
         # Cache the result
         self.travel_time_cache[cache_key] = formatted_time
