@@ -144,6 +144,24 @@ CRS_EPSG_4326 = "EPSG:4326"
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logging.getLogger('matplotlib').setLevel(logging.WARNING)  # Reduce matplotlib noise
 
+# Set up logging for HTTP requests
+http_logger = logging.getLogger('http.client')
+http_logger.setLevel(logging.DEBUG)
+
+# Create handler to capture HTTP traffic
+def http_debug_log(*args):
+    http_logger.debug(' '.join(args))
+
+# Enable detailed request logging
+def enable_http_logging():
+    """Enable detailed HTTP request logging"""
+    import http.client
+    http.client.print = http_debug_log
+    http.client.HTTPConnection.debuglevel = 1
+    requests_logger = logging.getLogger('requests.packages.urllib3')
+    requests_logger.setLevel(logging.DEBUG)
+    requests_logger.propagate = True
+
 class RouteData:
     """Class for managing cities, connections, and travel times data"""
     
@@ -158,21 +176,38 @@ class RouteData:
         
         # Add geodata access for improved calculations
         try:
+            # Enable HTTP logging before geopy initialization
+            enable_http_logging()
+            
             import geopy.geocoders
             from geopy.extra.rate_limiter import RateLimiter
+            import requests
+            import urllib3
             
-            # Use a simpler initialization without custom adapter factory
+            # Log SSL/TLS information
+            logging.info(f"OpenSSL version: {urllib3.util.ssl_.OPENSSL_VERSION}")
+            logging.info(f"SSL context: {urllib3.util.ssl_.create_urllib3_context()}")
+            
+            # Use the simplest possible initialization with no custom adapters
+            logging.info("Initializing Nominatim geocoder...")
             self.geolocator = geopy.geocoders.Nominatim(
-                user_agent="train_route_visualizer",
-                scheme='https',
-                timeout=10
+                user_agent="train_route_visualizer"
             )
+            logging.info(f"Geocoder initialized: {self.geolocator}")
+            
+            # Create rate limiter with logging
+            logging.info("Setting up rate limiter for geocoding...")
             self.geocode = RateLimiter(self.geolocator.geocode, min_delay_seconds=1)
             self.has_geopy = True
+            
             logging.info("Geopy available - using enhanced geographic data for calculations")
         except ImportError:
             self.has_geopy = False
             logging.info("Geopy not available - install it with 'pip install geopy' for more accurate terrain data. Using approximations for now.")
+        except Exception as e:
+            logging.error(f"Error initializing Nominatim geocoder: {e}", exc_info=True)
+            self.has_geopy = False
+            logging.info("Geopy initialization failed - falling back to approximations.")
         
         self.travel_time_cache = {}  # Cache for calculated travel times
 
@@ -661,8 +696,9 @@ class RouteData:
         for i, chain in enumerate(chains):
             start = chain[0][0] if chain else "N/A"
             end = chain[-1][1] if chain else "N/A"
-            has_custom_name = str(i) in self.route_data.route_chain_names
-            custom_name = self.route_data.route_chain_names.get(str(i), "")
+            # Fix: Access route_chain_names directly from self instead of self.route_data
+            has_custom_name = str(i) in self.route_chain_names
+            custom_name = self.route_chain_names.get(str(i), "")
             logging.info(f"Chain {i}: {start} to {end}, {len(chain)} segments, " +
                          f"Has custom name: {has_custom_name}, Name: '{custom_name}'")
         return chains
