@@ -153,7 +153,7 @@ class RouteData:
         self.travel_times_data = DEFAULT_TRAVEL_TIMES.copy()
         self.city_ids = {city: f"city_{i}" for i, city in enumerate(self.cities.keys())}
         self.connection_train_types = TRAIN_ROUTES_TYPE.copy()
-        self.route_splits = set()  # Set of (city1, city2) tuples marking end-of-day splits
+        self.daybreak_connections = set()  # Set of (city1, city2) tuples marking daybreaks
         self.route_chain_names = {}  # Maps route index to custom name
         
         # Add geodata access for improved calculations
@@ -456,22 +456,22 @@ class RouteData:
     def save_to_file(self, filepath):
         """Save cities, connections, train types, and zoomed states to a file"""
         try:
-            # Log route_splits before saving
-            logging.info(f"Saving route_splits: {self.route_splits}")
+            # Log daybreak_connections before saving
+            logging.info(f"Saving daybreak_connections: {self.daybreak_connections}")
             with open(filepath, 'w') as file:
-                route_splits_dict = {}
+                daybreak_dict = {}
                 for conn in self.connections:
-                    route_splits_dict[str(conn)] = (conn in self.route_splits)
+                    daybreak_dict[str(conn)] = (conn in self.daybreak_connections)
                 json.dump({
                     "cities": self.cities, 
                     "connections": self.connections, 
                     "train_types": {str(k): v for k, v in self.connection_train_types.items()},
                     "travel_times": {str(k): v for k, v in self.travel_times_data.items()},
                     "zoomed_states": self.zoomed_states if hasattr(self, 'zoomed_states') else None,
-                    "route_splits": route_splits_dict,
+                    "daybreaks": daybreak_dict,
                     "route_chain_names": self.route_chain_names
                 }, file)
-            logging.info(f"Saved route_splits_dict: {route_splits_dict}")
+            logging.info(f"Saved daybreak_dict: {daybreak_dict}")
             return True, f"Routes saved successfully to {filepath}."
         except Exception as e:
             return False, f"Failed to save routes: {str(e)}"
@@ -525,31 +525,30 @@ class RouteData:
                 self.route_chain_names = data.get("route_chain_names", {})
                 logging.info(f"Loaded route chain names: {self.route_chain_names}")
                 
-                # Load route splits (support both old and new formats)
-                self.route_splits = set()
-                route_splits_data = data.get("route_splits", {})
-                logging.info(f"Loaded route_splits_data from file: {route_splits_data}")
-                if isinstance(route_splits_data, dict):
+                # Load daybreaks (support both old and new formats)
+                self.daybreak_connections = set()
+                daybreaks_data = data.get("daybreaks", {})
+                logging.info(f"Loaded daybreaks_data from file: {daybreaks_data}")
+                if isinstance(daybreaks_data, dict):
                     # New format: {str(conn): bool}
-                    for k, v in route_splits_data.items():
+                    for k, v in daybreaks_data.items():
                         if v:
                             tuple_str = k.strip("()").replace("'", "").split(", ")
                             if len(tuple_str) == 2:
                                 city1, city2 = tuple_str[0], tuple_str[1]
-                                # Store split in the same order as in connections list
+                                # Store daybreak in the same order as in connections list
                                 for conn in self.connections:
-                                    # Ensure conn is a tuple
                                     conn_tuple = tuple(conn) if isinstance(conn, list) else conn
                                     if (conn_tuple[0] == city1 and conn_tuple[1] == city2) or (conn_tuple[0] == city2 and conn_tuple[1] == city1):
-                                        self.route_splits.add(conn_tuple)
-                                        logging.info(f"Added route split: {conn_tuple}")
+                                        self.daybreak_connections.add(conn_tuple)
+                                        logging.info(f"Added daybreak: {conn_tuple}")
                                         break
-                elif isinstance(route_splits_data, list):
+                elif isinstance(daybreaks_data, list):
                     # Old format: list of lists/tuples
-                    for split in route_splits_data:
-                        if isinstance(split, (list, tuple)) and len(split) == 2:
-                            self.route_splits.add(tuple(split))
-                logging.info(f"Loaded route_splits set: {self.route_splits}")
+                    for db in daybreaks_data:
+                        if isinstance(db, (list, tuple)) and len(db) == 2:
+                            self.daybreak_connections.add(tuple(db))
+                logging.info(f"Loaded daybreak_connections set: {self.daybreak_connections}")
                 
                 # DO NOT automatically add missing default connections
                 # This was causing the issue with Frankfurt-Mannheim and Schwerin-Stralsund
@@ -597,9 +596,9 @@ class RouteData:
             if conn[0] in default_city_names or conn[1] in default_city_names:
                 del self.connection_train_types[conn]
 
-    def split_chain_at_connection(self, city1, city2):
+    def break_chain_at_connection(self, city1, city2):
         """
-        Split the route chain at the given connection (city1, city2).
+        Break the route chain at the given connection (city1, city2).
         This removes the connection and ensures the two resulting subgraphs are disconnected.
         """
         # Remove the connection
@@ -607,28 +606,28 @@ class RouteData:
         if not removed:
             return False, "Connection does not exist."
 
-        # No further action needed: the removal of the connection splits the chain.
+        # No further action needed: the removal of the connection breaks the chain.
         # The plotting code already visualizes separate chains.
-        return True, f"Route chain split at {city1} ↔ {city2}."
+        return True, f"Route chain broken at {city1} ↔ {city2}."
 
-    def mark_end_of_day(self, city1, city2):
-        """Mark the connection from city1 to city2 as the last of the day (split here)."""
-        self.route_splits.add((city1, city2))
+    def mark_daybreak(self, city1, city2):
+        """Mark the connection from city1 to city2 as a daybreak (break here)."""
+        self.daybreak_connections.add((city1, city2))
 
-    def unmark_end_of_day(self, city1, city2):
-        """Remove the end-of-day marker from the connection."""
-        self.route_splits.discard((city1, city2))
+    def unmark_daybreak(self, city1, city2):
+        """Remove the daybreak marker from the connection."""
+        self.daybreak_connections.discard((city1, city2))
 
-    def is_end_of_day(self, city1, city2):
-        """Check if the connection is marked as end of day."""
+    def is_daybreak(self, city1, city2):
+        """Check if the connection is marked as daybreak."""
         # Check both directions
-        result = (city1, city2) in self.route_splits or (city2, city1) in self.route_splits
-        logging.debug(f"Checking end of day for ({city1}, {city2}): {result}, route_splits: {self.route_splits}")
+        result = (city1, city2) in self.daybreak_connections or (city2, city1) in self.daybreak_connections
+        logging.debug(f"Checking daybreak for ({city1}, {city2}): {result}, daybreak_connections: {self.daybreak_connections}")
         return result
 
     def get_route_chains(self):
         """
-        Return a list of chains (lists of cities) split at end-of-day markers.
+        Return a list of chains (lists of cities) split at daybreak markers.
         Each chain is a list of (city1, city2) tuples.
         """
         # Build adjacency list
@@ -642,7 +641,7 @@ class RouteData:
         visited_edges = set()
         chains = []
 
-        # Helper to walk a chain, splitting at end-of-day markers
+        # Helper to walk a chain, breaking at daybreak markers
         def walk_chain(start, prev=None):
             chain = []
             stack = deque([(start, prev)])
@@ -655,8 +654,8 @@ class RouteData:
                         continue
                     visited_edges.add(edge)
                     chain.append((node, neighbor))
-                    # If this is an end-of-day split, stop chain here
-                    if (node, neighbor) in self.route_splits:
+                    # If this is a daybreak, stop chain here
+                    if (node, neighbor) in self.daybreak_connections:
                         chains.append(chain[:])
                         chain.clear()
                         # Start a new chain from neighbor
@@ -689,10 +688,12 @@ class RouteData:
 
     def get_raw_travel_time(self, city1, city2):
         """Get the raw travel time in minutes without formatting"""
+        # Check if the travel time exists in the travel_times_data dictionary
         if (city1, city2) in self.travel_times_data:
             return self.travel_times_data[(city1, city2)]
         elif (city2, city1) in self.travel_times_data:
             return self.travel_times_data[(city2, city1)]
+        # Return None if no custom travel time is set
         return None
 
 
@@ -950,7 +951,7 @@ class MapPlotter:
     
     def draw_legend_on_axes(self, ax, full_page=False):
         """Draw legend on the given axes (reusable for both main plot and PDF export)"""
-        # Use improved route chain logic with end-of-day splits
+        # Use improved route chain logic with daybreaks
         chains = self.route_data.get_route_chains()
         if not chains:
             return
@@ -1044,8 +1045,8 @@ class MapPlotter:
                             fontsize=8 if full_page else 6, color='#555555',
                             ha='left', va='center', transform=ax.transAxes)
 
-                # Add end of day marker if present
-                if self.route_data.is_end_of_day(city1, city2):
+                # Add daybreak marker if present
+                if self.route_data.is_daybreak(city1, city2):
                     ax.text(x_pos + 0.25, chain_y, "", fontsize=8 if full_page else 6, color='red',
                             ha='left', va='center', transform=ax.transAxes, fontweight='bold')
 
@@ -1452,7 +1453,7 @@ class TrainRouteApp:
         else:
             messagebox.showerror("Error", message)
     def export_as_pdf(self):
-        """Export current map as PDF"""
+        """Export currentmap as PDF"""
         # Ask user for save location instead of using fixed path
         export_path = filedialog.asksaveasfilename(
             defaultextension=".pdf", 
@@ -1504,8 +1505,8 @@ class TrainRouteApp:
         travel_time_status_label = tk.Label(edit_window, textvariable=travel_time_status_var, font=("Arial", 9), fg="blue")
         travel_time_status_label.grid(row=3, column=0, columnspan=2, padx=10, pady=5, sticky="w")
 
-        # End of day marker
-        end_of_day_var = tk.BooleanVar(edit_window)
+        # Daybreak marker
+        daybreak_var = tk.BooleanVar(edit_window)
 
         # Update fields when connection changes
         def update_fields(*args):
@@ -1525,10 +1526,10 @@ class TrainRouteApp:
             else:
                 travel_time_status_var.set("Calculated travel time is being used.")
 
-            # Update end of day marker
-            is_split = self.route_data.is_end_of_day(city1, city2)
-            logging.info(f"Edit Connection Dialog: Checking split for ({city1}, {city2}): {is_split}")
-            end_of_day_var.set(is_split)
+            # Update daybreak marker
+            is_db = self.route_data.is_daybreak(city1, city2)
+            logging.info(f"Edit Connection Dialog: Checking daybreak for ({city1}, {city2}): {is_db}")
+            daybreak_var.set(is_db)
 
         # Reset to calculated travel time
         def reset_to_calculated():
@@ -1567,11 +1568,11 @@ class TrainRouteApp:
                     messagebox.showerror("Error", "Travel time must be a positive integer.")
                     return
 
-            # Update end of day marker
-            if end_of_day_var.get():
-                self.route_data.mark_end_of_day(city1, city2)
+            # Update daybreak marker
+            if daybreak_var.get():
+                self.route_data.mark_daybreak(city1, city2)
             else:
-                self.route_data.unmark_end_of_day(city1, city2)
+                self.route_data.unmark_daybreak(city1, city2)
 
             messagebox.showinfo("Success", f"Connection {city1} → {city2} updated successfully!")
             edit_window.destroy()
@@ -1582,17 +1583,17 @@ class TrainRouteApp:
         def make_new_route_from_here():
             selected_conn = connection_var.get().split(" → ")
             city1, city2 = selected_conn[0], selected_conn[1]
-            result, msg = self.route_data.split_chain_at_connection(city1, city2)
+            result, msg = self.route_data.break_chain_at_connection(city1, city2)
             if result:
-                messagebox.showinfo("Route Split", msg)
+                messagebox.showinfo("Route Break", msg)
                 edit_window.destroy()
                 if update_plot:
                     self.map_plotter.update_plot()
             else:
                 messagebox.showerror("Error", msg)
 
-        # End of day checkbox
-        tk.Checkbutton(edit_window, text="This connection is the last of the day (split route here)", variable=end_of_day_var).grid(
+        # Daybreak checkbox
+        tk.Checkbutton(edit_window, text="This connection is a daybreak (break route here)", variable=daybreak_var).grid(
             row=5, column=0, columnspan=2, padx=10, pady=5, sticky="w"
         )
 
@@ -1743,16 +1744,6 @@ class TrainRouteApp:
         logging.debug(f"Final computed Haversine distance (in kilometers): {EARTH_RADIUS_KM * c}")
         logging.debug("Haversine distance calculation completed.")
         return EARTH_RADIUS_KM * c
-
-    def get_raw_travel_time(self, city1, city2):
-        """Get the raw travel time in minutes without formatting"""
-        # Check if the travel time exists in the travel_times_data dictionary
-        if (city1, city2) in self.travel_times_data:
-            return self.travel_times_data[(city1, city2)]
-        elif (city2, city1) in self.travel_times_data:
-            return self.travel_times_data[(city2, city1)]
-        # Return None if no custom travel time is set
-        return None
 
 if __name__ == "__main__":
     app = TrainRouteApp(tk.Tk())
