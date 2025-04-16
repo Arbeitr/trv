@@ -153,6 +153,7 @@ class RouteData:
         self.travel_times_data = DEFAULT_TRAVEL_TIMES.copy()
         self.city_ids = {city: f"city_{i}" for i, city in enumerate(self.cities.keys())}
         self.connection_train_types = TRAIN_ROUTES_TYPE.copy()
+        self.route_splits = set()  # Set of (city1, city2) tuples marking end-of-day splits
         
         # Add geodata access for improved calculations
         try:
@@ -460,7 +461,8 @@ class RouteData:
                     "connections": self.connections, 
                     "train_types": {str(k): v for k, v in self.connection_train_types.items()},
                     "travel_times": {str(k): v for k, v in self.travel_times_data.items()},
-                    "zoomed_states": self.zoomed_states if hasattr(self, 'zoomed_states') else None  # Save zoomed states
+                    "zoomed_states": self.zoomed_states if hasattr(self, 'zoomed_states') else None,  # Save zoomed states
+                    "route_splits": list(self.route_splits)  # Save route splits
                 }, file)
             return True, f"Routes saved successfully to {filepath}."
         except Exception as e:
@@ -503,6 +505,9 @@ class RouteData:
                 
                 # Load zoomed states (default to None if missing)
                 self.zoomed_states = data.get("zoomed_states", None)
+                
+                # Load route splits (default to empty set if missing)
+                self.route_splits = set(tuple(split) for split in data.get("route_splits", []))
                 
                 # Ensure default connections and train types are added if missing
                 for connection in DEFAULT_CONNECTIONS:
@@ -550,6 +555,71 @@ class RouteData:
         # No further action needed: the removal of the connection splits the chain.
         # The plotting code already visualizes separate chains.
         return True, f"Route chain split at {city1} ↔ {city2}."
+
+    def mark_end_of_day(self, city1, city2):
+        """Mark the connection from city1 to city2 as the last of the day (split here)."""
+        self.route_splits.add((city1, city2))
+
+    def unmark_end_of_day(self, city1, city2):
+        """Remove the end-of-day marker from the connection."""
+        self.route_splits.discard((city1, city2))
+
+    def is_end_of_day(self, city1, city2):
+        """Check if the connection is marked as end of day."""
+        return (city1, city2) in self.route_splits
+
+    def get_route_chains(self):
+        """
+        Return a list of chains (lists of cities) split at end-of-day markers.
+        Each chain is a list of (city1, city2) tuples.
+        """
+        # Build adjacency list
+        from collections import defaultdict, deque
+
+        adj = defaultdict(list)
+        for c1, c2 in self.connections:
+            adj[c1].append(c2)
+            adj[c2].append(c1)
+
+        visited_edges = set()
+        chains = []
+
+        # Helper to walk a chain, splitting at end-of-day markers
+        def walk_chain(start, prev=None):
+            chain = []
+            stack = deque([(start, prev)])
+            while stack:
+                node, parent = stack.pop()
+                for neighbor in adj[node]:
+                    edge = (node, neighbor)
+                    edge_rev = (neighbor, node)
+                    if (node, neighbor) in visited_edges or (neighbor, node) in visited_edges:
+                        continue
+                    visited_edges.add(edge)
+                    chain.append((node, neighbor))
+                    # If this is an end-of-day split, stop chain here
+                    if (node, neighbor) in self.route_splits:
+                        chains.append(chain[:])
+                        chain.clear()
+                        # Start a new chain from neighbor
+                        stack.append((neighbor, node))
+                    else:
+                        stack.append((neighbor, node))
+            if chain:
+                chains.append(chain)
+
+        # Start a chain from every city that has not been visited
+        visited_nodes = set()
+        for city in self.cities:
+            if city not in visited_nodes and city in adj:
+                # Walk from this city
+                walk_chain(city)
+                # Mark all cities in this component as visited
+                for c1, c2 in visited_edges:
+                    visited_nodes.add(c1)
+                    visited_nodes.add(c2)
+
+        return chains
 
 
 class MapPlotter:
@@ -806,101 +876,73 @@ class MapPlotter:
     
     def draw_legend_on_axes(self, ax, full_page=False):
         """Draw legend on the given axes (reusable for both main plot and PDF export)"""
-        # Group connections into chains
-        chains = []
-        visited = set()
-        def dfs(city, chain):
-            for conn in self.route_data.connections:
-                if city in conn:
-                    other_city = conn[1] if conn[0] == city else conn[0]
-                    if other_city not in visited:
-                        visited.add(other_city)
-                        chain.append((city, other_city))
-                        dfs(other_city, chain)
-        
-        for city in self.route_data.cities:
-            if city not in visited:
-                visited.add(city)
-                chain = []
-                dfs(city, chain)
-                if chain:
-                    chains.append(chain)
-        
+        # Use improved route chain logic with end-of-day splits
+        chains = self.route_data.get_route_chains()
         if not chains:
             return
             
         # Adjust layout parameters based on whether this is a full page or not
         if full_page:
-            # For full page legend (more space)
-            columns = min(4, len(chains))  # Max 4 chains per row
+            columns = min(4, len(chains))
             x_spacing = 0.9 / columns
             x_start = 0.05
-            y_start_top = 0.9  # Start from top
+            y_start_top = 0.9
             y_decrement = 0.04
-            chain_height_factor = 20  # How many items can fit in a column
+            chain_height_factor = 20
         else:
-            # Default (constrained) settings
-            columns = min(3, len(chains)) 
+            columns = min(3, len(chains))
             x_spacing = 0.7 / columns
             x_start = 0.1
             y_start_top = 0.3
             y_decrement = 0.05
             chain_height_factor = 10
         
-        # Draw route chains in columns
         for chain_idx, chain in enumerate(chains):
             column = chain_idx % columns
             row = chain_idx // columns
-            
-            # Calculate position
             x_pos = x_start + (column * x_spacing)
             y_start = y_start_top - (row * (1.0 / chain_height_factor) * len(chain))
             chain_y = y_start
-            
-            # If we're running out of vertical space, adjust
+
             if chain_y < 0.1:
-                continue  # Skip this chain if it won't fit
-                
-            # Draw chain title
+                continue
+
             ax.text(x_pos, chain_y + 0.02, f"Route {chain_idx + 1}", 
                     fontsize=12 if full_page else 10, fontweight='bold', 
                     transform=ax.transAxes, ha='left')
             chain_y -= y_decrement
-            
-            # Track total travel time
+
             total_time_minutes = 0
-            
+
             # Draw each segment in the chain
             for i, (city1, city2) in enumerate(chain):
                 # Draw connecting line with train type color
                 if i > 0:
                     train_type = self.route_data.get_train_type(city1, city2)
                     line_color = TRAIN_TYPES[train_type]["color"]
-                    
                     ax.plot([x_pos, x_pos], 
                             [chain_y + y_decrement, chain_y],
                             color=line_color, linewidth=3 if full_page else 2, 
                             linestyle='-', alpha=0.9,
                             transform=ax.transAxes, clip_on=False)
-                            
                     # Add train type label
                     ax.text(x_pos - 0.02, chain_y + y_decrement/2, train_type, 
                             fontsize=8 if full_page else 6, fontweight='bold', 
                             ha='right', va='center',
                             transform=ax.transAxes, clip_on=False)
-                
+
                 # Draw station symbol
                 ax.plot(x_pos, chain_y, marker='o', markersize=10 if full_page else 8,
                         markeredgecolor='black', markerfacecolor='white', 
                         transform=ax.transAxes, clip_on=False)
-                
+
                 # Add city label
                 ax.text(x_pos + 0.02, chain_y, city1, 
                         fontsize=10 if full_page else 7, fontfamily='sans-serif', 
                         ha='left', va='center', transform=ax.transAxes, clip_on=False, 
                         bbox=dict(facecolor='white', edgecolor='none', 
                                  boxstyle='round,pad=0.2' if full_page else 'round,pad=0.1'))
-                
+
                 # Calculate travel time
                 travel_time = self.route_data.get_travel_time(city1, city2)
                 if travel_time != "N/A":
@@ -912,60 +954,47 @@ class MapPlotter:
                     elif "min" in travel_time:
                         minutes = int(travel_time.replace("min", "").strip())
                     total_time_minutes += hours * 60 + minutes
-                    
-                    # Add travel time next to line (for all segments)
+
+                    # --- Align travel time label directly under the city label ---
+                    # Place the travel time label at the same x as the city label, but slightly below
                     time_text = f"{hours}h {minutes}m" if hours > 0 else f"{minutes}min"
-                    if i > 0:
-                        # For middle segments
-                        ax.text(x_pos + 0.15, chain_y + y_decrement/2, time_text,
-                                fontsize=8 if full_page else 6, color='#555555',
-                                ha='left', va='center', transform=ax.transAxes)
-                    else:
-                        # For first segment (below the city)
-                        ax.text(x_pos + 0.15, chain_y - y_decrement/2, time_text,
-                                fontsize=8 if full_page else 6, color='#555555',
-                                ha='left', va='center', transform=ax.transAxes)
-                
+                    ax.text(x_pos + 0.02, chain_y - y_decrement/2, time_text,
+                            fontsize=8 if full_page else 6, color='#555555',
+                            ha='left', va='center', transform=ax.transAxes)
+
+                # Add end-of-day marker if present
+                if self.route_data.is_end_of_day(city1, city2):
+                    ax.text(x_pos + 0.25, chain_y, "", fontsize=8 if full_page else 6, color='red',
+                            ha='left', va='center', transform=ax.transAxes, fontweight='bold')
+
                 chain_y -= y_decrement
-            
+
             # Add last city in chain
             if chain:
                 last_city = chain[-1][1]
-                
-                # Draw station symbol for last city
                 ax.plot(x_pos, chain_y, marker='o', markersize=10 if full_page else 8,
                         markeredgecolor='black', markerfacecolor='white', 
                         transform=ax.transAxes, clip_on=False)
-                
-                # Add label for last city
                 ax.text(x_pos + 0.02, chain_y, last_city, 
                         fontsize=10 if full_page else 7, fontfamily='sans-serif', 
                         ha='left', va='center', transform=ax.transAxes, clip_on=False, 
                         bbox=dict(facecolor='white', edgecolor='none', 
                                  boxstyle='round,pad=0.2' if full_page else 'round,pad=0.1'))
-                
                 # Draw connecting line to last city
                 if chain:
                     second_last_city = chain[-1][0]
                     last_city = chain[-1][1]
-                    
                     train_type = self.route_data.get_train_type(second_last_city, last_city)
                     line_color = TRAIN_TYPES[train_type]["color"]
-                    
-                    # Draw line connecting last two cities
                     ax.plot([x_pos, x_pos], 
                             [chain_y + y_decrement, chain_y],
                             color=line_color, linewidth=3 if full_page else 2, 
                             linestyle='-', alpha=0.9,
                             transform=ax.transAxes, clip_on=False)
-                    
-                    # Add train type label
                     ax.text(x_pos - 0.02, chain_y + y_decrement/2, train_type, 
                             fontsize=8 if full_page else 6, fontweight='bold', 
                             ha='right', va='center',
                             transform=ax.transAxes, clip_on=False)
-                            
-                    # Add travel time for last segment
                     travel_time = self.route_data.get_travel_time(second_last_city, last_city)
                     if travel_time != "N/A" and travel_time != "0 min":
                         hours, minutes = 0, 0
@@ -975,13 +1004,11 @@ class MapPlotter:
                             minutes = int(time_parts[1].replace("m", "").strip()) if "m" in time_parts[1] else 0
                         elif "min" in travel_time:
                             minutes = int(travel_time.replace("min", "").strip())
-                        
                         time_text = f"{hours}h {minutes}m" if hours > 0 else f"{minutes}min"
-                        ax.text(x_pos + 0.15, chain_y + y_decrement/2, time_text,
+                        # --- Align travel time label under last city label ---
+                        ax.text(x_pos + 0.02, chain_y - y_decrement/2, time_text,
                                 fontsize=8 if full_page else 6, color='#555555',
                                 ha='left', va='center', transform=ax.transAxes)
-        
-            # Add total time at the bottom
             total_hours = total_time_minutes // 60
             total_minutes = total_time_minutes % 60
             total_time_str = f"Total: {total_hours}h {total_minutes}m" if total_hours > 0 else f"Total: {total_minutes} min"
@@ -1367,7 +1394,7 @@ class TrainRouteApp:
 
         edit_window = tk.Toplevel(self.root if not hasattr(self, 'integrated_window') else self.integrated_window)
         edit_window.title("Edit Connection")
-        edit_window.geometry("400x340")
+        edit_window.geometry("400x380")
         edit_window.resizable(False, False)
 
         # Connection selection
@@ -1394,6 +1421,9 @@ class TrainRouteApp:
         travel_time_status_label = tk.Label(edit_window, textvariable=travel_time_status_var, font=("Arial", 9), fg="blue")
         travel_time_status_label.grid(row=3, column=0, columnspan=2, padx=10, pady=5, sticky="w")
 
+        # End of day marker
+        end_of_day_var = tk.BooleanVar(edit_window)
+
         # Update fields when connection changes
         def update_fields(*args):
             selected_conn = connection_var.get().split(" → ")
@@ -1411,6 +1441,9 @@ class TrainRouteApp:
                 travel_time_status_var.set("Custom travel time is being used.")
             else:
                 travel_time_status_var.set("Calculated travel time is being used.")
+
+            # Update end of day marker
+            end_of_day_var.set(self.route_data.is_end_of_day(city1, city2))
 
         # Reset to calculated travel time
         def reset_to_calculated():
@@ -1449,6 +1482,12 @@ class TrainRouteApp:
                     messagebox.showerror("Error", "Travel time must be a positive integer.")
                     return
 
+            # Update end of day marker
+            if end_of_day_var.get():
+                self.route_data.mark_end_of_day(city1, city2)
+            else:
+                self.route_data.unmark_end_of_day(city1, city2)
+
             messagebox.showinfo("Success", f"Connection {city1} → {city2} updated successfully!")
             edit_window.destroy()
             if update_plot:
@@ -1467,11 +1506,14 @@ class TrainRouteApp:
             else:
                 messagebox.showerror("Error", msg)
 
+        # End of day checkbox
+        tk.Checkbutton(edit_window, text="This connection is the last of the day (split route here)", variable=end_of_day_var).grid(
+            row=5, column=0, columnspan=2, padx=10, pady=5, sticky="w"
+        )
+
         # Buttons
-        tk.Button(edit_window, text="Reset to Calculated", command=reset_to_calculated).grid(row=4, column=0, padx=10, pady=10, sticky="w")
-        tk.Button(edit_window, text="Save Changes", command=save_changes).grid(row=4, column=1, padx=10, pady=10, sticky="e")
-        # Add the "Make New Route From Here" button
-        tk.Button(edit_window, text="Make New Route From Here", command=make_new_route_from_here, fg="red").grid(row=5, column=0, columnspan=2, padx=10, pady=10, sticky="ew")
+        tk.Button(edit_window, text="Reset to Calculated", command=reset_to_calculated).grid(row=6, column=0, padx=10, pady=10, sticky="w")
+        tk.Button(edit_window, text="Save Changes", command=save_changes).grid(row=6, column=1, padx=10, pady=10, sticky="e")
 
         # Initialize fields
         update_fields()
