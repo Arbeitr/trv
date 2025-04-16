@@ -12,6 +12,8 @@ from shapely.geometry import LineString, Point
 from geopandas import GeoSeries
 import pgeocode
 from math import radians, sin, cos, sqrt, atan2
+import threading  # Import threading for background tasks
+from tkinter.ttk import Progressbar  # Import Progressbar for loading screen
 
 # --- Constants ---
 SHAPEFILE_PATH = "ne_10m_admin_1_states_provinces.shp"
@@ -470,8 +472,15 @@ class RouteData:
         """Load cities, connections, train types, and zoomed states from a file"""
         try:
             with open(filepath, 'r') as file:
-                data = json.load(file)
+                try:
+                    data = json.load(file)
+                except json.JSONDecodeError as e:
+                    return False, f"Failed to load routes: Malformed JSON - {str(e)}"
+                
+                # Load cities (default to empty dict if missing)
                 self.cities = data.get("cities", {})
+                
+                # Load connections (default to empty list if missing)
                 self.connections = data.get("connections", [])
                 
                 # Handle train types - convert string tuple keys back to actual tuples
@@ -479,7 +488,6 @@ class RouteData:
                 self.connection_train_types = {}
                 for k, v in train_types_data.items():
                     # Convert string representation of tuple to actual tuple
-                    # Format is typically: "('City1', 'City2')"
                     tuple_str = k.strip("()").replace("'", "").split(", ")
                     if len(tuple_str) == 2:
                         self.connection_train_types[(tuple_str[0], tuple_str[1])] = v
@@ -492,14 +500,22 @@ class RouteData:
                     if len(tuple_str) == 2:
                         self.travel_times_data[(tuple_str[0], tuple_str[1])] = v
                 
+                # Generate city IDs if missing
                 self.city_ids = {city: f"city_{i}" for i, city in enumerate(self.cities.keys())}
                 
-                # Load zoomed states (backward compatibility)
+                # Load zoomed states (default to None if missing)
                 self.zoomed_states = data.get("zoomed_states", None)
-            return True, f"Routes loaded successfully from {filepath}."
+                
+                # Ensure default connections and train types are added if missing
+                for connection in DEFAULT_CONNECTIONS:
+                    if connection not in self.connections and connection[::-1] not in self.connections:
+                        self.connections.append(connection)
+                        self.connection_train_types[connection] = TRAIN_ROUTES_TYPE.get(connection, DEFAULT_TRAIN_TYPE)
+                
+                return True, f"Routes loaded successfully from {filepath}."
         except Exception as e:
             return False, f"Failed to load routes: {str(e)}"
-    
+
     def update_city_coordinates(self, city_name, lon, lat):
         """Update coordinates for an existing city"""
         if city_name in self.cities:
@@ -526,34 +542,42 @@ class RouteData:
 
 class MapPlotter:
     """Class for handling map visualization"""
-    
     def __init__(self, route_data):
         self.route_data = route_data
-        self.fig, self.ax = plt.subplots(figsize=(10, 10))
+        self.fig = None
+        self.ax = None
         self.canvas = None
         self.germany_map = None
         self.filtered_states = None
         self.current_zoom_bounds = None
         self.state_ids = {}
-        
+        self.show_travel_time_labels = True  # Add a flag to control travel time label visibility
+
     def initialize_map(self, germany_map):
         """Initialize the map with Germany data"""
         self.germany_map = germany_map
         self.state_ids = {state: f"state_{i}" for i, state in enumerate(germany_map['name'])}
         self.germany_map['state_id'] = self.germany_map['name'].map(self.state_ids)
         self.germany_map['bounding_box'] = self.germany_map.geometry.apply(lambda geom: geom.bounds)
-    
+
+        # Ensure backward compatibility by initializing missing attributes
+        if not hasattr(self, 'verify_labels_hidden'):
+            self.verify_labels_hidden = lambda: None  # Add a no-op method if missing
+
     def set_canvas(self, master):
         """Set up the matplotlib canvas in the Tkinter window"""
+        # Ensure figure and axes are created in the main thread
+        if self.fig is None or self.ax is None:
+            self.fig, self.ax = plt.subplots(figsize=(10, 10))
         self.ax.set_facecolor('#F5F5F5')
         self.germany_map.boundary.plot(ax=self.ax, linewidth=0.8, color='#CCCCCC')
-        
+
         self.canvas = FigureCanvasTkAgg(self.fig, master=master)
         canvas_widget = self.canvas.get_tk_widget()
         canvas_widget.pack(fill=tk.BOTH, expand=True)
-        
-        # Initial plot
-        self.update_plot()
+
+        # Defer plot updates to the main thread
+        master.after(0, self.update_plot)
         return canvas_widget
     
     def update_plot(self):
@@ -717,8 +741,10 @@ class MapPlotter:
     
     def adjust_travel_time_labels(self):
         """Add travel time labels at the midpoint of connections"""
+        if not self.show_travel_time_labels:
+            return  # Skip adding labels if the flag is False
+
         existing_labels = set()
-        
         for city1, city2 in self.route_data.connections:
             if city1 not in self.route_data.cities or city2 not in self.route_data.cities:
                 continue
@@ -726,7 +752,7 @@ class MapPlotter:
             travel_time = self.route_data.get_travel_time(city1, city2)
             train_type = self.route_data.get_train_type(city1, city2)
             label = f"{train_type}: {travel_time}"
-            
+
             if label in existing_labels:
                 continue  # Skip duplicate labels
 
@@ -740,196 +766,10 @@ class MapPlotter:
 
             # Draw travel time label with train type
             self.ax.text(mid_x, mid_y, label, fontsize=8, fontfamily='sans-serif',
-                    fontweight='bold', color='black', 
-                    bbox=dict(facecolor='white', edgecolor=TRAIN_TYPES[train_type]["color"], 
-                             boxstyle='round,pad=0.2', alpha=0.9),
-                    zorder=11)
-
-        # Remove the problematic code that's causing the crash
-        # The below line had an unterminated string literal causing the syntax error
-        # for text in self.ax.texts:
-        #    if text.get_gid() in clustered_cities: this method anyway, as it's handled elsewhere
-        #        text.set_visible(False)
-    
-    def verify_labels_hidden(self):
-        """Hide labels for cities outside the filtered states"""
-        if self.filtered_states is None:
-            return
-        for text in self.ax.texts:
-            label_coords = (text.get_position()[0], text.get_position()[1])
-            point = GeoSeries([gpd.points_from_xy([label_coords[0]], [label_coords[1]])[0]], crs=CRS_EPSG_4326)
-            # Check if point is within any filtered state
-            if not self.filtered_states.geometry.apply(lambda geom: point.iloc[0].within(geom)).any():
-                text.set_visible(False)
-            else:
-                text.set_visible(True)
-    
-    def add_legend(self):
-        """Add a legend to the current plot"""
-        # Clear any existing legends
-        for child in self.fig.get_children():
-            if isinstance(child, plt.Axes) and child != self.ax:
-                child.remove()
-        
-        # Create a new axes for the legend at the bottom of the plot
-        # Use less space than before to avoid squishing
-        legend_ax = self.fig.add_axes([0.1, 0.02, 0.8, 0.2])
-        legend_ax.axis('off')
-        
-        # Draw the legend using the shared method
-        self.draw_legend_on_axes(legend_ax)
-    
-    def draw_legend_on_axes(self, ax, full_page=False):
-        """Draw legend on the given axes (reusable for both main plot and PDF export)"""
-        # Group connections into chains
-        chains = []
-        visited = set()
-        def dfs(city, chain):
-            for conn in self.route_data.connections:
-                if city in conn:
-                    other_city = conn[1] if conn[0] == city else conn[0]
-                    if other_city not in visited:
-                        visited.add(other_city)
-                        chain.append(conn)  # Store the original connection tuple
-                        dfs(other_city, chain)
-        
-        for city in self.route_data.cities:
-            if city not in visited:
-                visited.add(city)
-                chain = []
-                dfs(city, chain)
-                if chain:
-                    chains.append(chain)
-        
-        if not chains:
-            return
-            
-        # Adjust layout parameters based on whether this is a full page or not
-        if full_page:
-            columns = min(4, len(chains))  # Max 4 chains per row
-            x_spacing = 0.9 / columns
-            x_start = 0.05
-            y_start_top = 0.9  # Start from top
-            y_decrement = 0.04
-        else:
-            columns = min(3, len(chains)) 
-            x_spacing = 0.7 / columns
-            x_start = 0.1
-            y_start_top = 0.3
-            y_decrement = 0.05
-        
-        # Draw route chains in columns
-        for chain_idx, chain in enumerate(chains):
-            column = chain_idx % columns
-            row = chain_idx // columns
-            
-            # Calculate position
-            x_pos = x_start + (column * x_spacing)
-            y_start = y_start_top - (row * y_decrement * len(chain))
-            chain_y = y_start
-            
-            # Draw chain title
-            ax.text(x_pos, chain_y + 0.02, f"Route {chain_idx + 1}", 
-                    fontsize=12 if full_page else 10, fontweight='bold', 
-                    transform=ax.transAxes, ha='left')
-            chain_y -= y_decrement
-            
-            # Draw each segment in the chain
-            for conn in chain:
-                city1, city2 = conn
-                # Create a unique route identifier
-                route_id = (city1, city2) if (city1, city2) in self.route_data.connection_train_types else (city2, city1)
-                
-                # Retrieve the correct train type using the route identifier
-                train_type = self.route_data.connection_train_types.get(route_id, DEFAULT_TRAIN_TYPE)
-                line_color = TRAIN_TYPES[train_type]["color"]
-                
-                # Draw connecting line with train type color
-                ax.plot([x_pos, x_pos], 
-                        [chain_y, chain_y - y_decrement],  # Adjusted to start at the current city and end one city lower
-                        color=line_color, linewidth=3 if full_page else 2, 
-                        linestyle='-', alpha=0.9,
-                        transform=ax.transAxes, clip_on=False)
-
-                # Add train type label
-                ax.text(x_pos - 0.02, chain_y - y_decrement / 2, train_type,  # Adjusted to align with the middle of the line
-                        fontsize=8 if full_page else 6, fontweight='bold', 
-                        ha='right', va='center',
-                        transform=ax.transAxes, clip_on=False)
-                
-                # Draw station symbol
-                ax.plot(x_pos, chain_y, marker='o', markersize=10 if full_page else 8,
-                        markeredgecolor='black', markerfacecolor='white', 
-                        transform=ax.transAxes, clip_on=False)
-                
-                # Add city label
-                ax.text(x_pos + 0.02, chain_y, city1, 
-                        fontsize=10 if full_page else 7, fontfamily='sans-serif', 
-                        ha='left', va='center', transform=ax.transAxes, clip_on=False, 
-                        bbox=dict(facecolor='white', edgecolor='none', 
-                                 boxstyle='round,pad=0.2' if full_page else 'round,pad=0.1'))
-                
-                chain_y -= y_decrement
-            
-            # Add the last city in the chain
-            if chain:
-                last_city = chain[-1][1]
-                ax.plot(x_pos, chain_y, marker='o', markersize=10 if full_page else 8,
-                        markeredgecolor='black', markerfacecolor='white', 
-                        transform=ax.transAxes, clip_on=False)
-                ax.text(x_pos + 0.02, chain_y, last_city, 
-                        fontsize=10 if full_page else 7, fontfamily='sans-serif', 
-                        ha='left', va='center', transform=ax.transAxes, clip_on=False, 
-                        bbox=dict(facecolor='white', edgecolor='none', 
-                                 boxstyle='round,pad=0.2' if full_page else 'round,pad=0.1'))
-
-    def export_as_pdf(self, filepath):
-        """Export the map as a DIN A4 PDF"""
-        try:
-            # Create directory only if it doesn't already exist in the path
-            directory = os.path.dirname(filepath)
-            if directory and not os.path.exists(directory):
-                os.makedirs(directory, exist_ok=True)
-            
-            # Save the original figure size to restore it later
-            original_figsize = self.fig.get_size_inches()
-            
-            with PdfPages(filepath) as pdf:
-                # First page - Map only (full page)
-                self.fig.set_size_inches(8.27, 11.69)  # DIN A4 dimensions
-                
-                # Save current axes position
-                original_position = self.ax.get_position()
-                
-                # Maximize map to use full page
-                self.ax.set_position([0.05, 0.05, 0.9, 0.9])
-                
-                # Save the map page (without legend)
-                pdf.savefig(self.fig, bbox_inches='tight')
-                
-                # Second page - Legend only
-                legend_fig = plt.figure(figsize=(8.27, 11.69))  # New figure for legend
-                legend_ax = legend_fig.add_subplot(111)
-                legend_ax.axis('off')
-                
-                # Draw the legend on the new figure
-                self.draw_legend_on_axes(legend_ax, full_page=True)
-                
-                # Add title to the legend page
-                legend_fig.suptitle("Train Route Legend", fontsize=16, y=0.98)
-                
-                # Save the legend page
-                pdf.savefig(legend_fig, bbox_inches='tight')
-                plt.close(legend_fig)  # Close the legend figure
-            
-            # Restore original map settings
-            self.ax.set_position(original_position)
-            self.fig.set_size_inches(original_figsize)
-            
-            return True, f"Plot exported successfully to {filepath}."
-        except Exception as e:
-            logging.error(f"Failed to export plot: {str(e)}", exc_info=True)
-            return False, f"Failed to export plot: {str(e)}"
+                         fontweight='bold', color='black',
+                         bbox=dict(facecolor='white', edgecolor=TRAIN_TYPES[train_type]["color"],
+                                   boxstyle='round,pad=0.2', alpha=0.9),
+                         zorder=11)
 
 class TrainRouteApp:
     """Main application class"""
@@ -938,19 +778,49 @@ class TrainRouteApp:
         self.root.title("City and Connection Manager")
         # Initialize data
         self.route_data = RouteData()
-        # Load map data
-        if not os.path.exists(SHAPEFILE_PATH):
-            raise Exception(f"Shapefile not found at {SHAPEFILE_PATH}. Please download it from Natural Earth.")
-        admin1 = gpd.read_file(SHAPEFILE_PATH)
-        admin1 = admin1[admin1['admin'] == 'Germany']
-        self.germany = admin1[admin1['admin'] == 'Germany']
-        # Initialize map plotter
+        # Show loading screen while loading map data
+        self.show_loading_screen("Loading map data...")
+        threading.Thread(target=self.load_map_data).start()  # Run map loading in a separate thread
+
+    def show_loading_screen(self, message):
+        """Display a loading screen with a progress bar"""
+        self.loading_window = tk.Toplevel(self.root)
+        self.loading_window.title("Loading")
+        self.loading_window.geometry("300x100")
+        self.loading_window.resizable(False, False)
+        tk.Label(self.loading_window, text=message, font=("Arial", 12)).pack(pady=10)
+        self.progress = Progressbar(self.loading_window, mode="indeterminate")
+        self.progress.pack(pady=10, padx=20, fill=tk.X)
+        self.progress.start(10)  # Start progress animation
+
+    def hide_loading_screen(self):
+        """Hide the loading screen"""
+        if hasattr(self, 'loading_window') and self.loading_window:
+            self.loading_window.destroy()
+
+    def load_map_data(self):
+        """Load map data in a background thread"""
+        try:
+            if not os.path.exists(SHAPEFILE_PATH):
+                raise Exception(f"Shapefile not found at {SHAPEFILE_PATH}. Please download it from Natural Earth.")
+            admin1 = gpd.read_file(SHAPEFILE_PATH)
+            admin1 = admin1[admin1['admin'] == 'Germany']
+            self.germany = admin1[admin1['admin'] == 'Germany']
+            # Defer map initialization to the main thread
+            self.root.after(0, self.initialize_map_plotter)
+        except Exception as e:
+            self.root.after(0, lambda: messagebox.showerror("Error", f"Failed to load map data: {e}"))
+        finally:
+            # Defer GUI updates to the main thread
+            self.root.after(0, self.hide_loading_screen)
+            self.root.after(0, self.setup_old_ui)
+            self.root.after(0, self.open_integrated_ui)
+
+    def initialize_map_plotter(self):
+        """Initialize the map plotter in the main thread"""
         self.map_plotter = MapPlotter(self.route_data)
         self.map_plotter.initialize_map(self.germany)
-        # Set up old UI (minimized)
-        self.setup_old_ui()
-        # Open integrated UI automatically
-        self.open_integrated_ui()
+
     def setup_old_ui(self):
         """Set up the original UI (will be minimized)"""
         # These buttons are just for compatibility and won't be visible
@@ -1015,6 +885,17 @@ class TrainRouteApp:
         # Update plot commands
         menu_bar.add_command(label="Update Plot", command=self.reset_zoom)
         menu_bar.add_command(label="Update Plot (Selected State)", command=self.map_plotter.update_plot)
+
+        # Add a toggle for travel time labels
+        view_menu = tk.Menu(menu_bar, tearoff=0)
+        menu_bar.add_cascade(label="View", menu=view_menu)
+        view_menu.add_command(label="Toggle Travel Time Labels", command=self.toggle_travel_time_labels)
+
+    def toggle_travel_time_labels(self):
+        """Toggle the visibility of travel time labels"""
+        self.map_plotter.show_travel_time_labels = not self.map_plotter.show_travel_time_labels
+        self.map_plotter.update_plot()  # Refresh the plot to apply changes
+
     def on_close(self):
         """Handle window closing"""
         self.integrated_window.destroy()
