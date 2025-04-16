@@ -93,7 +93,7 @@ TYPICAL_STATIONS_PER_100KM = {
     "ICE": 0.5,  # High-speed trains have fewer stops
     "IC": 1,     # Inter-city trains have more stops
     "RE": 2,     # Regional express trains have even more stops
-    "RB": 3,     # Regional trains have the most stops
+    "RB": 3,     # Regional train routes tend to be the most indirect
     "S": 4       # S-Bahn has very frequent stops (typically every few km)
 }
 GEOGRAPHIC_FACTORS = {
@@ -154,6 +154,7 @@ class RouteData:
         self.city_ids = {city: f"city_{i}" for i, city in enumerate(self.cities.keys())}
         self.connection_train_types = TRAIN_ROUTES_TYPE.copy()
         self.route_splits = set()  # Set of (city1, city2) tuples marking end-of-day splits
+        self.route_chain_names = {}  # Maps route index to custom name
         
         # Add geodata access for improved calculations
         try:
@@ -467,7 +468,8 @@ class RouteData:
                     "train_types": {str(k): v for k, v in self.connection_train_types.items()},
                     "travel_times": {str(k): v for k, v in self.travel_times_data.items()},
                     "zoomed_states": self.zoomed_states if hasattr(self, 'zoomed_states') else None,
-                    "route_splits": route_splits_dict
+                    "route_splits": route_splits_dict,
+                    "route_chain_names": self.route_chain_names
                 }, file)
             logging.info(f"Saved route_splits_dict: {route_splits_dict}")
             return True, f"Routes saved successfully to {filepath}."
@@ -519,6 +521,10 @@ class RouteData:
                 # Load zoomed states (default to None if missing)
                 self.zoomed_states = data.get("zoomed_states", None)
                 
+                # Load route chain names
+                self.route_chain_names = data.get("route_chain_names", {})
+                logging.info(f"Loaded route chain names: {self.route_chain_names}")
+                
                 # Load route splits (support both old and new formats)
                 self.route_splits = set()
                 route_splits_data = data.get("route_splits", {})
@@ -545,11 +551,24 @@ class RouteData:
                             self.route_splits.add(tuple(split))
                 logging.info(f"Loaded route_splits set: {self.route_splits}")
                 
-                # Ensure default connections and train types are added if missing
-                for connection in DEFAULT_CONNECTIONS:
-                    if connection not in self.connections and connection[::-1] not in self.connections:
-                        self.connections.append(connection)
-                        self.connection_train_types[connection] = TRAIN_ROUTES_TYPE.get(connection, DEFAULT_TRAIN_TYPE)
+                # DO NOT automatically add missing default connections
+                # This was causing the issue with Frankfurt-Mannheim and Schwerin-Stralsund
+                # being added back even though they were removed in the file
+                
+                # Check if any connections are missing train types and add defaults for those
+                for conn in self.connections:
+                    if conn not in self.connection_train_types and conn[::-1] not in self.connection_train_types:
+                        default_type = TRAIN_ROUTES_TYPE.get(conn, DEFAULT_TRAIN_TYPE)
+                        self.connection_train_types[conn] = default_type
+                
+                # Log the resulting connection structure for debugging
+                logging.info(f"Final loaded connections: {self.connections}")
+                chains = self.get_route_chains()
+                logging.info(f"Resulting chains ({len(chains)}):")
+                for i, chain in enumerate(chains):
+                    start = chain[0][0] if chain else "N/A"
+                    end = chain[-1][1] if chain else "N/A"
+                    logging.info(f"  Chain {i}: {start} to {end} ({len(chain)} segments)")
                 
                 return True, f"Routes loaded successfully from {filepath}."
         except Exception as e:
@@ -658,6 +677,14 @@ class RouteData:
                     visited_nodes.add(c1)
                     visited_nodes.add(c2)
 
+        logging.info(f"Generated {len(chains)} route chains")
+        for i, chain in enumerate(chains):
+            start = chain[0][0] if chain else "N/A"
+            end = chain[-1][1] if chain else "N/A"
+            has_custom_name = str(i) in self.route_chain_names
+            custom_name = self.route_chain_names.get(str(i), "")
+            logging.info(f"Chain {i}: {start} to {end}, {len(chain)} segments, " +
+                         f"Has custom name: {has_custom_name}, Name: '{custom_name}'")
         return chains
 
     def get_raw_travel_time(self, city1, city2):
@@ -944,6 +971,9 @@ class MapPlotter:
             y_decrement = 0.05
             chain_height_factor = 10
         
+        logging.info(f"Drawing legend with {len(chains)} chains, layout: {columns} columns")
+        logging.info(f"Route chain names available: {self.route_data.route_chain_names}")
+        
         for chain_idx, chain in enumerate(chains):
             column = chain_idx % columns
             row = chain_idx // columns
@@ -952,9 +982,14 @@ class MapPlotter:
             chain_y = y_start
 
             if chain_y < 0.1:
+                logging.warning(f"Chain {chain_idx} position {chain_y} is below 0.1, skipping")
                 continue
-
-            ax.text(x_pos, chain_y + 0.02, f"Route {chain_idx + 1}", 
+            
+            # Use custom name if available, otherwise use default name
+            route_name = self.route_data.route_chain_names.get(str(chain_idx), f"Route {chain_idx + 1}")
+            logging.info(f"Drawing chain {chain_idx} with name '{route_name}' at position ({column}, {row}), y={chain_y:.2f}")
+            
+            ax.text(x_pos, chain_y + 0.02, route_name, 
                     fontsize=12 if full_page else 10, fontweight='bold', 
                     transform=ax.transAxes, ha='left')
             chain_y -= y_decrement
@@ -1211,6 +1246,7 @@ class TrainRouteApp:
         conn_menu.add_command(label="Add Connection", command=lambda: self.add_connection_dialog(update_plot=True))
         conn_menu.add_command(label="Edit Connection", command=lambda: self.edit_connection_dialog(update_plot=True))
         conn_menu.add_command(label="Remove Connection", command=lambda: self.remove_route_dialog(update_plot=True))
+        conn_menu.add_command(label="Name Route Chains", command=self.name_route_chains_dialog)
         # Export menu
         export_menu = tk.Menu(menu_bar, tearoff=0)
         menu_bar.add_cascade(label="Export", menu=export_menu)
@@ -1567,6 +1603,97 @@ class TrainRouteApp:
         # Initialize fields
         update_fields()
         connection_var.trace('w', update_fields)
+
+    def name_route_chains_dialog(self):
+        """Dialog to name route chains"""
+        # Get the current route chains
+        chains = self.route_data.get_route_chains()
+        if not chains:
+            messagebox.showinfo("Info", "No route chains available to name.")
+            return
+        
+        name_window = tk.Toplevel(self.root if not hasattr(self, 'integrated_window') else self.integrated_window)
+        name_window.title("Name Route Chains")
+        name_window.geometry("500x400")
+        
+        # Create a frame with scrollbar
+        main_frame = tk.Frame(name_window)
+        main_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+        
+        canvas = tk.Canvas(main_frame)
+        scrollbar = tk.Scrollbar(main_frame, orient="vertical", command=canvas.yview)
+        scrollable_frame = tk.Frame(canvas)
+        
+        scrollable_frame.bind(
+            "<Configure>",
+            lambda e: canvas.configure(scrollregion=canvas.bbox("all"))
+        )
+        
+        canvas.create_window((0, 0), window=scrollable_frame, anchor="nw")
+        canvas.configure(yscrollcommand=scrollbar.set)
+        
+        canvas.pack(side="left", fill="both", expand=True)
+        scrollbar.pack(side="right", fill="y")
+        
+        # Create entries for each route chain
+        entries = []
+        for i, chain in enumerate(chains):
+            frame = tk.Frame(scrollable_frame)
+            frame.pack(fill=tk.X, pady=5)
+            
+            # Format a descriptive label for the route
+            start_city = chain[0][0]
+            end_city = chain[-1][1]
+            middle_cities = []
+            for j in range(1, len(chain)):
+                if j < 3:  # Only show first few cities to avoid clutter
+                    middle_cities.append(chain[j][0])
+            
+            cities_text = f"{start_city} → {' → '.join(middle_cities)}"
+            if len(middle_cities) < len(chain) - 1:
+                cities_text += " → ..."
+            cities_text += f" → {end_city}"
+            
+            tk.Label(frame, text=f"Route {i+1}:", font=("Arial", 10, "bold")).grid(row=0, column=0, sticky="w", padx=5)
+            tk.Label(frame, text=cities_text, wraplength=300).grid(row=1, column=0, sticky="w", padx=5)
+            
+            # Name label and entry
+            name_frame = tk.Frame(frame)
+            name_frame.grid(row=2, column=0, sticky="w", pady=5, padx=5)
+            
+            tk.Label(name_frame, text="Name:").pack(side=tk.LEFT)
+            entry = tk.Entry(name_frame, width=30)
+            entry.pack(side=tk.LEFT, padx=5)
+            
+            # Set current name if it exists
+            if str(i) in self.route_data.route_chain_names:
+                entry.insert(0, self.route_data.route_chain_names[str(i)])
+            
+            entries.append((i, entry))
+            
+            # Add separator
+            tk.Frame(scrollable_frame, height=1, bg="gray").pack(fill=tk.X, pady=5)
+        
+        def save_names():
+            # Save names to route data
+            for idx, entry in entries:
+                name = entry.get().strip()
+                if name:
+                    self.route_data.route_chain_names[str(idx)] = name
+                elif str(idx) in self.route_data.route_chain_names:
+                    del self.route_data.route_chain_names[str(idx)]
+            
+            # Update plot to reflect changes
+            self.map_plotter.update_plot()
+            name_window.destroy()
+            messagebox.showinfo("Success", "Route chain names saved successfully!")
+        
+        # Add buttons
+        button_frame = tk.Frame(name_window)
+        button_frame.pack(fill=tk.X, pady=10)
+        
+        tk.Button(button_frame, text="Cancel", command=name_window.destroy).pack(side=tk.LEFT, padx=10)
+        tk.Button(button_frame, text="Save", command=save_names).pack(side=tk.RIGHT, padx=10)
 
     def plot_map(self):
         """Plot the map in a matplotlib window (legacy function)"""
