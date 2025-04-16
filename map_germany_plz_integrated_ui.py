@@ -456,13 +456,18 @@ class RouteData:
         """Save cities, connections, train types, and zoomed states to a file"""
         try:
             with open(filepath, 'w') as file:
+                # Save route_splits as a dict with stringified connection keys and boolean values
+                route_splits_dict = {}
+                for conn in self.connections:
+                    # Mark True if this connection is an end-of-day split
+                    route_splits_dict[str(conn)] = (conn in self.route_splits)
                 json.dump({
                     "cities": self.cities, 
                     "connections": self.connections, 
                     "train_types": {str(k): v for k, v in self.connection_train_types.items()},
                     "travel_times": {str(k): v for k, v in self.travel_times_data.items()},
-                    "zoomed_states": self.zoomed_states if hasattr(self, 'zoomed_states') else None,  # Save zoomed states
-                    "route_splits": list(self.route_splits)  # Save route splits
+                    "zoomed_states": self.zoomed_states if hasattr(self, 'zoomed_states') else None,
+                    "route_splits": route_splits_dict
                 }, file)
             return True, f"Routes saved successfully to {filepath}."
         except Exception as e:
@@ -506,8 +511,30 @@ class RouteData:
                 # Load zoomed states (default to None if missing)
                 self.zoomed_states = data.get("zoomed_states", None)
                 
-                # Load route splits (default to empty set if missing)
-                self.route_splits = set(tuple(split) for split in data.get("route_splits", []))
+                # Load route splits (support both old and new formats)
+                self.route_splits = set()
+                route_splits_data = data.get("route_splits", {})
+                if isinstance(route_splits_data, dict):
+                    # New format: {str(conn): bool}
+                    for k, v in route_splits_data.items():
+                        if v:
+                            # Parse string "(city1, city2)" to tuple
+                            tuple_str = k.strip("()").replace("'", "").split(", ")
+                            if len(tuple_str) == 2:
+                                # Try both (city1, city2) and (city2, city1) for robustness
+                                conn_tuple = (tuple_str[0], tuple_str[1])
+                                if conn_tuple in self.connections:
+                                    self.route_splits.add(conn_tuple)
+                                else:
+                                    # Try reversed
+                                    conn_tuple_rev = (tuple_str[1], tuple_str[0])
+                                    if conn_tuple_rev in self.connections:
+                                        self.route_splits.add(conn_tuple_rev)
+                elif isinstance(route_splits_data, list):
+                    # Old format: list of lists/tuples
+                    for split in route_splits_data:
+                        if isinstance(split, (list, tuple)) and len(split) == 2:
+                            self.route_splits.add(tuple(split))
                 
                 # Ensure default connections and train types are added if missing
                 for connection in DEFAULT_CONNECTIONS:
@@ -620,6 +647,14 @@ class RouteData:
                     visited_nodes.add(c2)
 
         return chains
+
+    def get_raw_travel_time(self, city1, city2):
+        """Get the raw travel time in minutes without formatting"""
+        if (city1, city2) in self.travel_times_data:
+            return self.travel_times_data[(city1, city2)]
+        elif (city2, city1) in self.travel_times_data:
+            return self.travel_times_data[(city2, city1)]
+        return None
 
 
 class MapPlotter:
@@ -962,7 +997,7 @@ class MapPlotter:
                             fontsize=8 if full_page else 6, color='#555555',
                             ha='left', va='center', transform=ax.transAxes)
 
-                # Add end-of-day marker if present
+                # Add end of day marker if present
                 if self.route_data.is_end_of_day(city1, city2):
                     ax.text(x_pos + 0.25, chain_y, "", fontsize=8 if full_page else 6, color='red',
                             ha='left', va='center', transform=ax.transAxes, fontweight='bold')
