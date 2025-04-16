@@ -173,43 +173,82 @@ class RouteData:
         self.connection_train_types = TRAIN_ROUTES_TYPE.copy()
         self.daybreak_connections = set()  # Set of (city1, city2) tuples marking daybreaks
         self.route_chain_names = {}  # Maps route index to custom name
+        self.has_geopy = False
+        self.travel_time_cache = {}  # Cache for calculated travel times
+        self._geolocator = None
+        self._geocode = None
         
-        # Add geodata access for improved calculations
+        # Try to import geopy but don't initialize yet (defer until needed)
         try:
-            # Enable HTTP logging before geopy initialization
+            import geopy.geocoders
+            import requests
+            import urllib3
+            self.has_geopy = True
+            logging.info("Geopy available - will use enhanced geographic data for calculations")
+        except ImportError:
+            logging.info("Geopy not available - install it with 'pip install geopy' for more accurate terrain data. Using approximations for now.")
+
+    def __getstate__(self):
+        """
+        Customize object serialization to exclude non-picklable attributes.
+        This is called when the object is being pickled.
+        """
+        state = self.__dict__.copy()
+        # Remove non-picklable attributes
+        state['_geolocator'] = None
+        state['_geocode'] = None
+        return state
+
+    def _init_geocoder(self):
+        """Initialize geocoder on demand to avoid serialization issues"""
+        if self._geolocator is not None:
+            return True
+            
+        if not self.has_geopy:
+            return False
+            
+        try:
+            # Enable HTTP logging
             enable_http_logging()
             
             import geopy.geocoders
             from geopy.extra.rate_limiter import RateLimiter
-            import requests
-            import urllib3
+            import ssl
+            import certifi
             
-            # Log SSL/TLS information
-            logging.info(f"OpenSSL version: {urllib3.util.ssl_.OPENSSL_VERSION}")
-            logging.info(f"SSL context: {urllib3.util.ssl_.create_urllib3_context()}")
+            # Create a fresh SSL context each time (not stored as instance variable)
+            ssl_context = ssl.create_default_context(cafile=certifi.where())
+            logging.info("Created SSL context with certifi CA bundle")
             
-            # Use the simplest possible initialization with no custom adapters
-            logging.info("Initializing Nominatim geocoder...")
-            self.geolocator = geopy.geocoders.Nominatim(
-                user_agent="train_route_visualizer"
+            # Initialize Nominatim with the SSL context
+            logging.info("Initializing Nominatim geocoder with custom SSL context...")
+            self._geolocator = geopy.geocoders.Nominatim(
+                user_agent="train_route_visualizer",
+                ssl_context=ssl_context
             )
-            logging.info(f"Geocoder initialized: {self.geolocator}")
             
-            # Create rate limiter with logging
-            logging.info("Setting up rate limiter for geocoding...")
-            self.geocode = RateLimiter(self.geolocator.geocode, min_delay_seconds=1)
-            self.has_geopy = True
-            
-            logging.info("Geopy available - using enhanced geographic data for calculations")
-        except ImportError:
-            self.has_geopy = False
-            logging.info("Geopy not available - install it with 'pip install geopy' for more accurate terrain data. Using approximations for now.")
+            # Create rate limiter
+            self._geocode = RateLimiter(self._geolocator.geocode, min_delay_seconds=1)
+            logging.info("Geocoder initialized successfully")
+            return True
         except Exception as e:
             logging.error(f"Error initializing Nominatim geocoder: {e}", exc_info=True)
             self.has_geopy = False
-            logging.info("Geopy initialization failed - falling back to approximations.")
+            return False
+    
+    @property
+    def geolocator(self):
+        """Lazy-loaded geolocator property"""
+        if self._geolocator is None:
+            self._init_geocoder()
+        return self._geolocator
         
-        self.travel_time_cache = {}  # Cache for calculated travel times
+    @property
+    def geocode(self):
+        """Lazy-loaded geocode property"""
+        if self._geocode is None:
+            self._init_geocoder()
+        return self._geocode
 
     def add_city(self, postal_code):
         """Add a city based on postal code"""
@@ -413,9 +452,10 @@ class RouteData:
         # Check cache first if available
         if hasattr(self, '_region_cache') and coords in self._region_cache:
             return self._region_cache[coords]
-        if self.has_geopy:
+        
+        if self.has_geopy and self._init_geocoder():
             try:
-                # Reverse geocode to get location information
+                # Now use the lazily initialized geolocator
                 location = self.geolocator.reverse(f"{coords[1]}, {coords[0]}", language="de", timeout=5)
                 if location and location.raw.get('address'):
                     address = location.raw['address']
@@ -430,6 +470,7 @@ class RouteData:
             except Exception as e:
                 logging.error(f"Error in reverse geocoding: {e}")
                 # Fall through to approximation
+        
         # More complete approximation of German states based on coordinates
         lat, lon = coords[1], coords[0]
         # More precise mapping of coordinates to German states
