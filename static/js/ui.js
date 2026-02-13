@@ -249,7 +249,7 @@ const UIModule = (function() {
         state.connections.forEach(conn => {
             const fromName = state.stations[conn.from].name;
             const toName = state.stations[conn.to].name;
-            const travelTime = formatTravelTime(conn.travel_time_minutes);
+            const travelTime = Utils.formatTravelTime(conn.travel_time_minutes);
             
             const li = document.createElement('li');
             li.className = 'connection-item';
@@ -263,17 +263,6 @@ const UIModule = (function() {
             `;
             ul.appendChild(li);
         });
-    }
-    
-    // Helper: Format travel time
-    function formatTravelTime(minutes) {
-        const hours = Math.floor(minutes / 60);
-        const mins = minutes % 60;
-        if (hours > 0) {
-            return `${hours}h ${mins}m`;
-        } else {
-            return `${mins} min`;
-        }
     }
     
     // Get current project state

@@ -168,7 +168,7 @@ def route_on_graph(G, start_coord, end_coord):
                     path = nx.shortest_path(G_largest, start_node, end_node, weight='length')
                     distance = nx.shortest_path_length(G_largest, start_node, end_node, weight='length')
                     return path, distance, "rail_approx"
-                except:
+                except nx.NetworkXError:
                     pass
         
         return None, 0, None
@@ -204,7 +204,8 @@ def simplify_geometry(coords, tolerance=0.001):
         line = LineString(coords)
         simplified = line.simplify(tolerance, preserve_topology=True)
         return list(simplified.coords)
-    except:
+    except Exception as e:
+        logger.warning(f"Geometry simplification failed: {e}")
         return coords
 
 

@@ -271,9 +271,9 @@ def format_travel_time(minutes):
         Formatted string like "2h 30m" or "45 min"
     """
     hours = minutes // 60
-    mins = minutes % 60
+    remaining_minutes = minutes % 60
     
     if hours > 0:
-        return f"{hours}h {mins}m"
+        return f"{hours}h {remaining_minutes}m"
     else:
-        return f"{mins} min"
+        return f"{remaining_minutes} min"

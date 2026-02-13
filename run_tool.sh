@@ -32,8 +32,8 @@ source "$VENV_DIR/bin/activate"
 if [ ! -f "$VENV_DIR/.deps_installed" ] || \
    [ "$SCRIPT_DIR/requirements.txt" -nt "$VENV_DIR/.deps_installed" ]; then
     echo "📦 Installing dependencies..."
-    pip install --upgrade pip --quiet
-    pip install -r "$SCRIPT_DIR/requirements.txt" --quiet
+    pip install --upgrade pip -q
+    pip install -r "$SCRIPT_DIR/requirements.txt" -q
     touch "$VENV_DIR/.deps_installed"
     echo "✓ Dependencies installed"
 fi

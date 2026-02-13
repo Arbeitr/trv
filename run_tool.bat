@@ -35,8 +35,8 @@ goto run_app
 
 :install_deps
 echo 📦 Installing dependencies...
-python -m pip install --upgrade pip --quiet
-python -m pip install -r "%SCRIPT_DIR%requirements.txt" --quiet
+python -m pip install --upgrade pip -q
+python -m pip install -r "%SCRIPT_DIR%requirements.txt" -q
 type nul > "%DEPS_MARKER%"
 echo ✓ Dependencies installed
 

@@ -98,7 +98,7 @@ const MapModule = (function() {
         }).addTo(map);
         
         // Add popup with connection info
-        const travelTime = formatTravelTime(connectionData.travel_time_minutes);
+        const travelTime = Utils.formatTravelTime(connectionData.travel_time_minutes);
         const distanceKm = connectionData.distance_km.toFixed(1);
         
         polyline.bindPopup(`
@@ -130,17 +130,6 @@ const MapModule = (function() {
         if (markerCoords.length > 0) {
             const bounds = L.latLngBounds(markerCoords);
             map.fitBounds(bounds, { padding: [50, 50] });
-        }
-    }
-    
-    // Helper: Format travel time
-    function formatTravelTime(minutes) {
-        const hours = Math.floor(minutes / 60);
-        const mins = minutes % 60;
-        if (hours > 0) {
-            return `${hours}h ${mins}m`;
-        } else {
-            return `${mins} min`;
         }
     }
     

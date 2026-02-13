@@ -80,8 +80,8 @@ def generate_pdf(project_data):
                 ax1.plot(lon, lat, marker='o', markersize=10,
                         markeredgecolor='black', markerfacecolor='white', zorder=10)
                 ax1.text(lon + 0.1, lat, name, fontsize=8, fontweight='bold',
-                        color='white', ha='left', va='center',
-                        bbox=dict(facecolor='darkgrey', edgecolor='none', 
+                        color='black', ha='left', va='center',
+                        bbox=dict(facecolor='white', edgecolor='gray', linewidth=1,
                                 boxstyle='round,pad=0.3'), zorder=11)
         
         # Set title
