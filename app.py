@@ -62,7 +62,7 @@ def init_db():
 def find_free_port():
     """Find a free port for the Flask server."""
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-        s.bind(('', 0))
+        s.bind(('127.0.0.1', 0))  # Bind to localhost only for security
         s.listen(1)
         port = s.getsockname()[1]
     return port
