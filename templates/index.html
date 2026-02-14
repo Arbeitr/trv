@@ -1,0 +1,87 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Train Route Visualizer</title>
+    <!-- Leaflet CSS - fallback to CDN if local not available -->
+    <link rel="stylesheet" href="/static/lib/leaflet.css" 
+          onerror="this.onerror=null;this.href='https://unpkg.com/leaflet@1.9.4/dist/leaflet.css'">
+    <link rel="stylesheet" href="/static/css/style.css">
+</head>
+<body>
+    <div class="container">
+        <!-- Top Bar -->
+        <header class="top-bar">
+            <h1>🚂 Train Route Visualizer</h1>
+            <div class="top-controls">
+                <button id="btn-save" class="btn btn-primary">💾 Save</button>
+                <button id="btn-load" class="btn btn-secondary">📂 Load</button>
+                <button id="btn-export-pdf" class="btn btn-secondary">📄 Export PDF</button>
+            </div>
+        </header>
+
+        <!-- Main Content -->
+        <div class="main-content">
+            <!-- Sidebar -->
+            <aside class="sidebar">
+                <h2>Stations & Connections</h2>
+                
+                <!-- Station Search -->
+                <div class="search-section">
+                    <h3>Add Station</h3>
+                    <input type="text" id="station-search" placeholder="Search station..." autocomplete="off">
+                    <div id="station-results" class="autocomplete-results"></div>
+                    <button id="btn-add-station" class="btn btn-primary" disabled>Add Station</button>
+                </div>
+
+                <!-- Station List -->
+                <div class="station-list">
+                    <h3>Stations</h3>
+                    <ul id="stations-ul"></ul>
+                </div>
+
+                <!-- Add Connection -->
+                <div class="connection-section">
+                    <h3>Add Connection</h3>
+                    <select id="from-station"></select>
+                    <select id="to-station"></select>
+                    <select id="train-type">
+                        <option value="ICE">ICE (High-speed)</option>
+                        <option value="IC">IC (Inter-city)</option>
+                        <option value="RE" selected>RE (Regional Express)</option>
+                        <option value="RB">RB (Regional)</option>
+                    </select>
+                    <button id="btn-add-connection" class="btn btn-primary">➕ Add Connection</button>
+                </div>
+
+                <!-- Connection List -->
+                <div class="connection-list">
+                    <h3>Connections</h3>
+                    <ul id="connections-ul"></ul>
+                </div>
+            </aside>
+
+            <!-- Map Area -->
+            <main class="map-container">
+                <div id="map"></div>
+                <div id="loading" class="loading-overlay" style="display: none;">
+                    <div class="spinner"></div>
+                    <p>Querying railway data...</p>
+                </div>
+            </main>
+        </div>
+    </div>
+
+    <!-- Hidden file input for loading -->
+    <input type="file" id="file-input" accept=".trv" style="display: none;">
+
+    <!-- Scripts - Leaflet with CDN fallback -->
+    <script src="/static/lib/leaflet.js" 
+            onerror="this.onerror=null;this.src='https://unpkg.com/leaflet@1.9.4/dist/leaflet.js';"></script>
+    <script src="/static/js/utils.js"></script>
+    <script src="/static/js/map.js"></script>
+    <script src="/static/js/ui.js"></script>
+    <script src="/static/js/export.js"></script>
+</body>
+</html>

@@ -1,0 +1,290 @@
+/* Train Route Visualizer - DB Design System */
+
+:root {
+    /* DB Design Tokens */
+    --db-red: #EC0016;
+    --db-orange: #FF6600;
+    --db-blue: #1455C0;
+    --db-green: #408335;
+    --db-map-bg: #F5F5F5;
+    --db-state-border: #D7DCE1;
+    --db-font: 'Helvetica Neue', Arial, sans-serif;
+    
+    /* UI Colors */
+    --sidebar-bg: #FFFFFF;
+    --sidebar-border: #E0E0E0;
+    --text-primary: #282828;
+    --text-secondary: #646973;
+    --button-hover: #0D3A8F;
+}
+
+* {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+}
+
+body {
+    font-family: var(--db-font);
+    color: var(--text-primary);
+    background: var(--db-map-bg);
+    overflow: hidden;
+}
+
+.container {
+    display: flex;
+    flex-direction: column;
+    height: 100vh;
+}
+
+/* Top Bar */
+.top-bar {
+    background: white;
+    border-bottom: 2px solid var(--db-red);
+    padding: 1rem 2rem;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+}
+
+.top-bar h1 {
+    font-size: 1.5rem;
+    font-weight: 700;
+    color: var(--text-primary);
+}
+
+.top-controls {
+    display: flex;
+    gap: 0.5rem;
+}
+
+/* Buttons */
+.btn {
+    padding: 0.5rem 1rem;
+    border: none;
+    border-radius: 4px;
+    font-size: 0.9rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.2s;
+}
+
+.btn-primary {
+    background: var(--db-red);
+    color: white;
+}
+
+.btn-primary:hover {
+    background: #C40012;
+}
+
+.btn-secondary {
+    background: var(--db-blue);
+    color: white;
+}
+
+.btn-secondary:hover {
+    background: var(--button-hover);
+}
+
+/* Main Content Layout */
+.main-content {
+    display: flex;
+    flex: 1;
+    overflow: hidden;
+}
+
+/* Sidebar */
+.sidebar {
+    width: 320px;
+    background: var(--sidebar-bg);
+    border-right: 1px solid var(--sidebar-border);
+    padding: 1.5rem;
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    gap: 1.5rem;
+}
+
+.sidebar h2 {
+    font-size: 1.25rem;
+    font-weight: 700;
+    color: var(--text-primary);
+    margin-bottom: 1rem;
+}
+
+.sidebar h3 {
+    font-size: 1rem;
+    font-weight: 600;
+    color: var(--text-secondary);
+    margin-bottom: 0.5rem;
+}
+
+/* Search Section */
+.search-section {
+    position: relative;
+}
+
+.search-section input[type="text"] {
+    width: 100%;
+    padding: 0.5rem;
+    border: 1px solid var(--sidebar-border);
+    border-radius: 4px;
+    font-size: 0.9rem;
+}
+
+.autocomplete-results {
+    position: absolute;
+    top: 100%;
+    left: 0;
+    right: 0;
+    background: white;
+    border: 1px solid var(--sidebar-border);
+    border-top: none;
+    max-height: 200px;
+    overflow-y: auto;
+    z-index: 1000;
+    display: none;
+}
+
+.autocomplete-results.show {
+    display: block;
+}
+
+.autocomplete-item {
+    padding: 0.5rem;
+    cursor: pointer;
+    font-size: 0.9rem;
+}
+
+.autocomplete-item:hover {
+    background: var(--db-map-bg);
+}
+
+.autocomplete-item.selected {
+    background: var(--db-blue);
+    color: white;
+}
+
+#btn-add-station {
+    width: 100%;
+    margin-top: 0.5rem;
+}
+
+#btn-add-station:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+
+/* Station and Connection Lists */
+.station-list ul,
+.connection-list ul {
+    list-style: none;
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+}
+
+.station-item,
+.connection-item {
+    padding: 0.5rem;
+    background: var(--db-map-bg);
+    border-radius: 4px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    font-size: 0.9rem;
+}
+
+.station-item button,
+.connection-item button {
+    background: transparent;
+    border: none;
+    cursor: pointer;
+    font-size: 1.1rem;
+    color: var(--db-red);
+}
+
+.station-item button:hover,
+.connection-item button:hover {
+    color: #C40012;
+}
+
+/* Connection Section */
+.connection-section select,
+.connection-section button {
+    width: 100%;
+    margin-top: 0.5rem;
+}
+
+.connection-section select {
+    padding: 0.5rem;
+    border: 1px solid var(--sidebar-border);
+    border-radius: 4px;
+    font-size: 0.9rem;
+}
+
+/* Map Container */
+.map-container {
+    flex: 1;
+    position: relative;
+}
+
+#map {
+    width: 100%;
+    height: 100%;
+}
+
+/* Loading Overlay */
+.loading-overlay {
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: rgba(255, 255, 255, 0.9);
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    align-items: center;
+    z-index: 2000;
+}
+
+.spinner {
+    border: 4px solid var(--sidebar-border);
+    border-top: 4px solid var(--db-red);
+    border-radius: 50%;
+    width: 40px;
+    height: 40px;
+    animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+    0% { transform: rotate(0deg); }
+    100% { transform: rotate(360deg); }
+}
+
+.loading-overlay p {
+    margin-top: 1rem;
+    font-size: 0.9rem;
+    color: var(--text-secondary);
+}
+
+/* Train Type Colors */
+.train-ICE { color: var(--db-red); }
+.train-IC { color: var(--db-orange); }
+.train-RE { color: var(--db-blue); }
+.train-RB { color: var(--db-green); }
+
+/* Responsive */
+@media (max-width: 768px) {
+    .sidebar {
+        width: 100%;
+        max-height: 40vh;
+    }
+    
+    .main-content {
+        flex-direction: column;
+    }
+}

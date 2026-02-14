@@ -1,0 +1,5 @@
+flask>=3.0
+requests>=2.31
+networkx>=3.2
+shapely>=2.0
+matplotlib>=3.8
