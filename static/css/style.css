@@ -162,6 +162,21 @@ body {
     background: var(--db-map-bg);
 }
 
+.autocomplete-item.selected {
+    background: var(--db-blue);
+    color: white;
+}
+
+#btn-add-station {
+    width: 100%;
+    margin-top: 0.5rem;
+}
+
+#btn-add-station:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+
 /* Station and Connection Lists */
 .station-list ul,
 .connection-list ul {

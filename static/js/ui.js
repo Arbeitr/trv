@@ -8,7 +8,8 @@ const UIModule = (function() {
         stations: {},  // {station_id: {name, lat, lon}}
         connections: [],  // [{id, from, to, train_type, geometry, ...}]
         stationIdCounter: 0,
-        connectionIdCounter: 0
+        connectionIdCounter: 0,
+        selectedStation: null  // Track currently selected station from dropdown
     };
     
     // Initialize UI
@@ -22,6 +23,7 @@ const UIModule = (function() {
     function setupStationSearch() {
         const searchInput = document.getElementById('station-search');
         const resultsDiv = document.getElementById('station-results');
+        const addButton = document.getElementById('btn-add-station');
         
         let searchTimeout;
         
@@ -29,6 +31,10 @@ const UIModule = (function() {
             const query = this.value.trim();
             
             clearTimeout(searchTimeout);
+            
+            // Clear selection when search changes
+            state.selectedStation = null;
+            addButton.disabled = true;
             
             if (query.length < 2) {
                 resultsDiv.classList.remove('show');
@@ -40,9 +46,18 @@ const UIModule = (function() {
             }, 300);
         });
         
+        // Add button click handler
+        addButton.addEventListener('click', function() {
+            if (state.selectedStation) {
+                addStation(state.selectedStation);
+            }
+        });
+        
         // Close results when clicking outside
         document.addEventListener('click', function(e) {
-            if (!searchInput.contains(e.target) && !resultsDiv.contains(e.target)) {
+            if (!searchInput.contains(e.target) && 
+                !resultsDiv.contains(e.target) && 
+                !addButton.contains(e.target)) {
                 resultsDiv.classList.remove('show');
             }
         });
@@ -70,6 +85,7 @@ const UIModule = (function() {
     // Display search results
     function displaySearchResults(results) {
         const resultsDiv = document.getElementById('station-results');
+        const addButton = document.getElementById('btn-add-station');
         resultsDiv.innerHTML = '';
         
         if (results.length === 0) {
@@ -82,12 +98,30 @@ const UIModule = (function() {
             const item = document.createElement('div');
             item.className = 'autocomplete-item';
             item.textContent = `${station.name} (${station.type})`;
-            // Use mousedown with stopPropagation to prevent document click handler
-            item.addEventListener('mousedown', (e) => {
-                e.preventDefault(); // Prevent blur/focus issues
-                e.stopPropagation(); // Stop event from bubbling to document
-                addStation(station);
+            
+            // Click to select (not add immediately)
+            item.addEventListener('click', (e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                
+                // Remove previous selection
+                resultsDiv.querySelectorAll('.autocomplete-item').forEach(i => {
+                    i.classList.remove('selected');
+                });
+                
+                // Mark this item as selected
+                item.classList.add('selected');
+                
+                // Store selected station
+                state.selectedStation = station;
+                
+                // Enable add button
+                addButton.disabled = false;
+                
+                // Update search input to show selection
+                document.getElementById('station-search').value = station.name;
             });
+            
             resultsDiv.appendChild(item);
         });
         
@@ -112,9 +146,11 @@ const UIModule = (function() {
         updateStationSelects();
         MapModule.fitBounds();
         
-        // Clear search
+        // Clear search and selection
         document.getElementById('station-search').value = '';
         document.getElementById('station-results').classList.remove('show');
+        document.getElementById('btn-add-station').disabled = true;
+        state.selectedStation = null;
     }
     
     // Remove station from project
