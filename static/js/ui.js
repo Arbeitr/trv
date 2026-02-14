@@ -82,9 +82,10 @@ const UIModule = (function() {
             const item = document.createElement('div');
             item.className = 'autocomplete-item';
             item.textContent = `${station.name} (${station.type})`;
-            // Use mousedown instead of click to fire before the document click handler
+            // Use mousedown with stopPropagation to prevent document click handler
             item.addEventListener('mousedown', (e) => {
                 e.preventDefault(); // Prevent blur/focus issues
+                e.stopPropagation(); // Stop event from bubbling to document
                 addStation(station);
             });
             resultsDiv.appendChild(item);
